@@ -21,20 +21,38 @@ const ACTION_OPTIONS = [
   { value: "HOLD", label: "Force HOLD"                   },
 ];
 
+// ── Fallback token list (used immediately so dropdown is never empty) ─────────
+const FALLBACK_TOKENS = [
+  { value: "ethereum",                label: "Ethereum"       },
+  { value: "bitcoin",                 label: "Bitcoin"        },
+  { value: "polygon-ecosystem-token", label: "Polygon (POL)"  },
+  { value: "chainlink",               label: "Chainlink"      },
+  { value: "uniswap",                 label: "Uniswap"        },
+  { value: "aave",                    label: "Aave"           },
+];
+
 function actionColor(a) {
   if (a === "BUY")  return "green";
   if (a === "SELL") return "red";
   return "yellow";
 }
 
+function fmtChange(val) {
+  if (val == null) return "—";
+  const sign = val >= 0 ? "+" : "";
+  return `${sign}${val.toFixed(2)}%`;
+}
+
 export default function Trade() {
   const { account, signer } = useWallet();
   const { agent }           = useAgent();
 
-  const [tokens,     setTokens]    = useState([]);
+  // ✅ FIX 1: initialise tokens with fallback list immediately so the
+  //           dropdown is never empty while the backend request is in-flight.
+  const [tokens,     setTokens]    = useState(FALLBACK_TOKENS);
   const [token,      setToken]     = useState("ethereum");
   const [strategy,   setStrategy]  = useState("COMBINED");
-  const [actionMode, setActionMode]= useState("AI");  // "AI" | "BUY" | "SELL" | "HOLD"
+  const [actionMode, setActionMode]= useState("AI");
   const [decision,   setDecision]  = useState(null);
   const [result,     setResult]    = useState(null);
   const [loading,    setLoading]   = useState(false);
@@ -42,7 +60,7 @@ export default function Trade() {
   const [sigStatus,  setSigStatus] = useState(null);
   const [error,      setError]     = useState(null);
 
-  // Load token list dynamically from backend
+  // Load token list from backend (override fallback when ready)
   useEffect(() => {
     getTokens()
       .then((d) => {
@@ -50,18 +68,10 @@ export default function Trade() {
           value: t,
           label: t.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
         }));
-        setTokens(list);
+        if (list.length > 0) setTokens(list);
       })
       .catch(() => {
-        // Fallback token list matching backend
-        setTokens([
-          { value: "ethereum",                  label: "Ethereum"  },
-          { value: "bitcoin",                   label: "Bitcoin"   },
-          { value: "polygon-ecosystem-token",   label: "Polygon (POL)" },
-          { value: "chainlink",                 label: "Chainlink" },
-          { value: "uniswap",                   label: "Uniswap"   },
-          { value: "aave",                      label: "Aave"      },
-        ]);
+        // Already using fallback — no action needed
       });
   }, []);
 
@@ -72,6 +82,7 @@ export default function Trade() {
     </div>
   );
 
+  // ── Get AI Decision only (preview) ───────────────────────────────────────
   const handleDecision = async () => {
     setLoading(true);
     setError(null);
@@ -80,7 +91,6 @@ export default function Trade() {
     setSigStatus(null);
     try {
       const d = await getDecision({ token, strategy, wallet_address: account });
-      // If manual override is set, show what AI said vs what will be forced
       setDecision({ ...d, forcedAction: actionMode !== "AI" ? actionMode : null });
     } catch (e) {
       setError(e.response?.data?.detail || e.message);
@@ -89,6 +99,7 @@ export default function Trade() {
     }
   };
 
+  // ── Execute trade ─────────────────────────────────────────────────────────
   const handleExecute = async () => {
     setExecuting(true);
     setError(null);
@@ -96,11 +107,16 @@ export default function Trade() {
     setSigStatus(null);
 
     try {
-      // Step 1: Get decision from backend
-      const preDecision = await getDecision({ token, strategy, wallet_address: account });
-      const finalAction = actionMode !== "AI" ? actionMode : preDecision.action;
+      // ✅ FIX 2: fetch decision ONCE and reuse it for both preview and execution.
+      //           Previous code called getDecision twice, which could return
+      //           different market snapshots and wasted an API round-trip.
+      const preDecision = decision || await getDecision({ token, strategy, wallet_address: account });
+      const finalAction  = actionMode !== "AI" ? actionMode : preDecision.action;
 
-      // Step 2: MetaMask signature
+      // Show latest decision while we wait for signature
+      setDecision({ ...preDecision, forcedAction: actionMode !== "AI" ? actionMode : null });
+
+      // MetaMask signature
       setSigStatus("waiting");
       let signature = null;
       try {
@@ -121,14 +137,14 @@ export default function Trade() {
 
         signature = await signer.signMessage(message);
         setSigStatus("signed");
-      } catch (sigErr) {
+      } catch {
         setSigStatus("rejected");
         setError("Trade cancelled — MetaMask signature rejected.");
         setExecuting(false);
         return;
       }
 
-      // Step 3: Execute on backend
+      // Execute on backend
       const r = await executeTrade({
         token,
         strategy,
@@ -137,7 +153,6 @@ export default function Trade() {
         forced_action: actionMode !== "AI" ? actionMode : undefined,
       });
 
-      setDecision({ ...preDecision, forcedAction: actionMode !== "AI" ? actionMode : null });
       setResult(r);
 
     } catch (e) {
@@ -147,6 +162,50 @@ export default function Trade() {
     }
   };
 
+  // ── Indicator cards config ────────────────────────────────────────────────
+  // ✅ FIX 3: added 24h Change card; backend now always returns price_change_24h
+  //           in indicators. MA values use .toFixed(2) with $ prefix.
+  const indicatorCards = decision ? [
+    {
+      label: "RSI (14)",
+      val:   decision.indicators?.rsi != null
+               ? decision.indicators.rsi.toFixed(1)
+               : null,
+      color: decision.indicators?.rsi < 30  ? "text-green"
+           : decision.indicators?.rsi > 70  ? "text-red"
+           : "",
+    },
+    {
+      label: "MA7",
+      val:   decision.indicators?.ma_7 != null
+               ? `$${Number(decision.indicators.ma_7).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+               : null,
+    },
+    {
+      label: "MA25",
+      val:   decision.indicators?.ma_25 != null
+               ? `$${Number(decision.indicators.ma_25).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+               : null,
+    },
+    {
+      label: "Sentiment",
+      val:   decision.indicators?.sentiment != null
+               ? decision.indicators.sentiment.toFixed(4)
+               : null,
+      color: decision.indicators?.sentiment >  0.3 ? "text-green"
+           : decision.indicators?.sentiment < -0.3 ? "text-red"
+           : "",
+    },
+    {
+      label: "24h Change",
+      val:   decision.indicators?.price_change_24h != null
+               ? fmtChange(decision.indicators.price_change_24h)
+               : null,
+      color: (decision.indicators?.price_change_24h ?? 0) >= 0 ? "text-green" : "text-red",
+    },
+  ] : [];
+
+  // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="max-w-6xl mx-auto px-4 py-8 space-y-6">
 
@@ -181,7 +240,6 @@ export default function Trade() {
             </div>
           </div>
 
-          {/* Action mode info */}
           {actionMode !== "AI" && (
             <div className="mb-3 px-3 py-2 rounded border border-yellow/20 bg-yellow/5">
               <p className="text-xs mono text-yellow">
@@ -243,20 +301,22 @@ export default function Trade() {
       {/* AI Decision */}
       {decision && (
         <div>
-          <SectionTitle>AI Decision {decision.forcedAction ? "(Overridden)" : "(Preview)"}</SectionTitle>
+          <SectionTitle>
+            AI Decision {decision.forcedAction ? "(Overridden)" : "(Preview)"}
+          </SectionTitle>
           <Card>
             <div className="flex items-center gap-3 mb-4 flex-wrap">
-              {/* Show AI decision */}
               <div className="flex items-center gap-2">
                 <span className="text-xs text-dim mono">AI says:</span>
                 <Badge variant={actionColor(decision.action)}>{decision.action}</Badge>
               </div>
 
-              {/* Show override if set */}
               {decision.forcedAction && (
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-dim mono">→ Forced to:</span>
-                  <Badge variant={actionColor(decision.forcedAction)}>{decision.forcedAction}</Badge>
+                  <Badge variant={actionColor(decision.forcedAction)}>
+                    {decision.forcedAction}
+                  </Badge>
                 </div>
               )}
 
@@ -266,8 +326,8 @@ export default function Trade() {
               </span>
               <Badge
                 variant={
-                  decision.risk_level === "HIGH" ? "red" :
-                  decision.risk_level === "LOW"  ? "green" : "yellow"
+                  decision.risk_level === "HIGH"   ? "red"    :
+                  decision.risk_level === "LOW"    ? "green"  : "yellow"
                 }
               >
                 {decision.risk_level} risk
@@ -276,29 +336,29 @@ export default function Trade() {
 
             <p className="text-sm text-text mb-4 leading-relaxed">{decision.reason}</p>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {[
-                { label: "RSI (14)",  val: decision.indicators?.rsi != null ? decision.indicators.rsi.toFixed(1) : null,
-                  color: decision.indicators?.rsi < 30 ? "text-green" : decision.indicators?.rsi > 70 ? "text-red" : "" },
-                { label: "MA7",       val: decision.indicators?.ma_7  != null ? `$${decision.indicators.ma_7.toFixed(2)}`  : null },
-                { label: "MA25",      val: decision.indicators?.ma_25 != null ? `$${decision.indicators.ma_25.toFixed(2)}` : null },
-                { label: "Sentiment", val: decision.indicators?.sentiment != null ? decision.indicators.sentiment.toFixed(4) : null,
-                  color: decision.indicators?.sentiment > 0.3 ? "text-green" : decision.indicators?.sentiment < -0.3 ? "text-red" : "" },
-              ].map(({ label, val, color }) => (
+            {/* ✅ FIX 3: 5-card indicator grid (RSI, MA7, MA25, Sentiment, 24h Change) */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+              {indicatorCards.map(({ label, val, color }) => (
                 <div key={label} className="bg-bg rounded p-2 border border-border">
                   <p className="text-xs text-dim mono">{label}</p>
-                  <p className={`text-sm mono font-medium ${color || "text-text"}`}>{val ?? "—"}</p>
+                  <p className={`text-sm mono font-medium ${color || "text-text"}`}>
+                    {val ?? "—"}
+                  </p>
                 </div>
               ))}
             </div>
 
             {/* Signals breakdown */}
-            {decision.indicators?.signals && (
+            {decision.indicators?.signals &&
+              Object.keys(decision.indicators.signals).length > 0 && (
               <div className="mt-3 pt-3 border-t border-border">
                 <p className="text-xs text-dim mono mb-2">Signals</p>
                 <div className="flex flex-wrap gap-1.5">
                   {Object.entries(decision.indicators.signals).map(([k, v]) => (
-                    <span key={k} className="text-xs mono px-2 py-0.5 rounded bg-muted text-dim">
+                    <span
+                      key={k}
+                      className="text-xs mono px-2 py-0.5 rounded bg-muted text-dim"
+                    >
                       {v}
                     </span>
                   ))}
@@ -309,7 +369,9 @@ export default function Trade() {
         </div>
       )}
 
-      {executing && !sigStatus && <div className="flex justify-center py-6"><Spinner size={6} /></div>}
+      {executing && !sigStatus && (
+        <div className="flex justify-center py-6"><Spinner size={6} /></div>
+      )}
 
       {/* Execution Result */}
       {result && (
@@ -320,14 +382,16 @@ export default function Trade() {
               <Badge
                 variant={
                   result.status === "EXECUTED" ? "green" :
-                  result.status === "REJECTED" ? "red" : "yellow"
+                  result.status === "REJECTED" ? "red"   : "yellow"
                 }
               >
                 {result.status}
               </Badge>
               <Badge variant={actionColor(result.action)}>{result.action}</Badge>
               <span className="mono text-sm">{result.token_pair}</span>
-              {sigStatus === "signed" && <Badge variant="green">MetaMask Approved ✓</Badge>}
+              {sigStatus === "signed" && (
+                <Badge variant="green">MetaMask Approved ✓</Badge>
+              )}
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
@@ -339,7 +403,7 @@ export default function Trade() {
                   color: (result.pnl ?? 0) >= 0 ? "text-green" : "text-red",
                 },
                 { label: "Risk Check",  val: result.risk_check?.toUpperCase() },
-                { label: "Confidence",  val: `${result.confidence}%` },
+                { label: "Confidence",  val: `${result.confidence}%`          },
               ].map(({ label, val, color }) => (
                 <div key={label} className="bg-bg rounded p-2 border border-border">
                   <p className="text-xs text-dim mono">{label}</p>

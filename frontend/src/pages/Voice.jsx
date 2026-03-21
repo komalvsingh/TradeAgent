@@ -1,13 +1,17 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { useWallet } from "../context/WalletContext";
 import { useAgent } from "../context/AgentContext";
-import { sendVoice, getDashboard, executeTrade, getDecision } from "../utils/api";
-import { Card, SectionTitle, ActionBtn, Badge, ConnectPrompt, EmptyState, Spinner } from "../components/UI";
+import { sendVoice, getDashboard, executeTrade } from "../utils/api";
+import {
+  Card, SectionTitle, ActionBtn, Badge,
+  ConnectPrompt, EmptyState, Spinner,
+} from "../components/UI";
 
 const EXAMPLES = [
   "Buy ETH now",
   "Sell Bitcoin",
   "What is my PnL?",
+  "What is my status?",
   "Show my risk heatmap",
   "Switch to conservative mode",
   "Switch to aggressive mode",
@@ -25,28 +29,102 @@ function actionColor(a) {
 const SpeechRecognition =
   window.SpeechRecognition || window.webkitSpeechRecognition || null;
 
-export default function Voice() {
-  const { account, signer }    = useWallet();
-  const { agent, refetch }     = useAgent();
-  const [input,     setInput]    = useState("");
-  const [response,  setResponse] = useState(null);
-  const [tradeResult, setTradeResult] = useState(null);
-  const [loading,   setLoading]  = useState(false);
-  const [executing, setExecuting] = useState(false);
-  const [listening, setListening] = useState(false);
-  const [sigStatus, setSigStatus] = useState(null); // "waiting"|"signed"|"rejected"
-  const [error,     setError]    = useState(null);
-  const [history,   setHistory]  = useState([]);
-  const [stats,     setStats]    = useState(null);
-  const inputRef  = useRef(null);
-  const recogRef  = useRef(null);
+// ── Text-to-Speech helper ─────────────────────────────────────────────────────
+function useTTS() {
+  const synthRef     = useRef(window.speechSynthesis);
+  const utteranceRef = useRef(null);
+  const [speaking,   setSpeaking]  = useState(false);
+  const [ttsEnabled, setTtsEnabled] = useState(true);  // user can toggle off
+  const [ttsVoice,   setTtsVoice]  = useState(null);   // preferred voice
+  const [voices,     setVoices]    = useState([]);
 
-  // Load live dashboard stats to show real PnL, trust score
+  // Load available voices (async in Chrome)
+  useEffect(() => {
+    const loadVoices = () => {
+      const v = synthRef.current.getVoices();
+      if (v.length > 0) {
+        setVoices(v);
+        // Prefer a clear English voice — Google US English if available
+        const preferred =
+          v.find((x) => x.name === "Google US English") ||
+          v.find((x) => x.lang === "en-US" && !x.localService) ||
+          v.find((x) => x.lang.startsWith("en")) ||
+          v[0];
+        setTtsVoice(preferred);
+      }
+    };
+    loadVoices();
+    synthRef.current.onvoiceschanged = loadVoices;
+    return () => { synthRef.current.onvoiceschanged = null; };
+  }, []);
+
+  const speak = useCallback((text) => {
+    if (!ttsEnabled || !text) return;
+
+    // Cancel any current speech
+    synthRef.current.cancel();
+
+    // Strip markdown-style symbols that sound weird when spoken
+    const clean = text
+      .replace(/[$]/g, " dollars ")
+      .replace(/[%]/g, " percent ")
+      .replace(/[_\-*#]/g, " ")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+
+    const utt    = new SpeechSynthesisUtterance(clean);
+    utt.voice    = ttsVoice;
+    utt.lang     = "en-US";
+    utt.rate     = 1.0;   // natural pace
+    utt.pitch    = 1.0;
+    utt.volume   = 1.0;
+
+    utt.onstart  = () => setSpeaking(true);
+    utt.onend    = () => setSpeaking(false);
+    utt.onerror  = () => setSpeaking(false);
+
+    utteranceRef.current = utt;
+    synthRef.current.speak(utt);
+  }, [ttsEnabled, ttsVoice]);
+
+  const stop = useCallback(() => {
+    synthRef.current.cancel();
+    setSpeaking(false);
+  }, []);
+
+  return { speak, stop, speaking, ttsEnabled, setTtsEnabled, voices, ttsVoice, setTtsVoice };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+export default function Voice() {
+  const { account, signer }  = useWallet();
+  const { agent, refetch }   = useAgent();
+
+  const {
+    speak, stop, speaking,
+    ttsEnabled, setTtsEnabled,
+    voices, ttsVoice, setTtsVoice,
+  } = useTTS();
+
+  const [input,       setInput]       = useState("");
+  const [response,    setResponse]    = useState(null);
+  const [tradeResult, setTradeResult] = useState(null);
+  const [loading,     setLoading]     = useState(false);
+  const [executing,   setExecuting]   = useState(false);
+  const [listening,   setListening]   = useState(false);
+  const [sigStatus,   setSigStatus]   = useState(null);
+  const [error,       setError]       = useState(null);
+  const [history,     setHistory]     = useState([]);
+  const [stats,       setStats]       = useState(null);
+
+  const inputRef = useRef(null);
+  const recogRef = useRef(null);
+
+  // Load live stats
   useEffect(() => {
     if (!account || !agent) return;
-    getDashboard(account)
-      .then(setStats)
-      .catch(() => {});
+    getDashboard(account).then(setStats).catch(() => {});
   }, [account, agent]);
 
   if (!account) return <ConnectPrompt />;
@@ -56,10 +134,12 @@ export default function Voice() {
     </div>
   );
 
-  // ── Send voice command to backend ─────────────────────────────────────────
+  // ── Send command ───────────────────────────────────────────────────────────
   const send = async (text) => {
     const cmd = (text || input).trim();
     if (!cmd) return;
+
+    stop(); // cancel any ongoing speech
     setLoading(true);
     setError(null);
     setResponse(null);
@@ -75,34 +155,42 @@ export default function Voice() {
       ]);
       setInput("");
 
-      // Refresh agent + stats after settings change
+      // ✅ Auto-speak the AI response
+      if (r.explanation) {
+        speak(r.explanation);
+      }
+
       if (r.intent === "settings") {
         await refetch();
         const s = await getDashboard(account).catch(() => null);
         if (s) setStats(s);
       }
     } catch (e) {
-      setError(e.response?.data?.detail || e.message);
+      const msg = e.response?.data?.detail || e.message;
+      setError(msg);
+      speak(`Sorry, there was an error: ${msg}`);
     } finally {
       setLoading(false);
       inputRef.current?.focus();
     }
   };
 
-  // ── Execute the trade from a voice command ────────────────────────────────
+  // ── Execute voice trade ───────────────────────────────────────────────────
   const executeVoiceTrade = async () => {
     if (!response?.decision) return;
     setExecuting(true);
     setError(null);
     setTradeResult(null);
     setSigStatus(null);
+    stop();
 
     try {
       const token    = response.token || "ethereum";
       const strategy = agent.strategy;
 
-      // Step 1: MetaMask signature
       setSigStatus("waiting");
+      speak("Please approve the trade in your MetaMask wallet.");
+
       try {
         const message = [
           "═══ Voice AI Trade Approval ═══",
@@ -118,66 +206,70 @@ export default function Voice() {
         ].join("\n");
         await signer.signMessage(message);
         setSigStatus("signed");
+        speak("Signature confirmed. Executing trade now.");
       } catch {
         setSigStatus("rejected");
         setError("Trade cancelled — MetaMask signature rejected.");
+        speak("Trade cancelled. MetaMask signature was rejected.");
         setExecuting(false);
         return;
       }
 
-      // Step 2: Execute
-      const result = await executeTrade({
-        token,
-        strategy,
-        wallet_address: account,
-      });
+      const result = await executeTrade({ token, strategy, wallet_address: account });
       setTradeResult(result);
 
-      // Refresh stats after execution
+      // Speak the result
+      const pnlStr = result.pnl != null
+        ? `PnL is ${result.pnl >= 0 ? "positive" : "negative"} ${Math.abs(result.pnl).toFixed(4)} dollars.`
+        : "";
+      speak(
+        `Trade ${result.status.toLowerCase()}. ` +
+        `${result.action} ${result.token_pair} for ${result.amount_usd} dollars. ` +
+        `${pnlStr}`
+      );
+
       const s = await getDashboard(account).catch(() => null);
       if (s) setStats(s);
       await refetch();
 
     } catch (e) {
-      setError(e.response?.data?.detail || e.message);
+      const msg = e.response?.data?.detail || e.message;
+      setError(msg);
+      speak(`Trade execution failed: ${msg}`);
     } finally {
       setExecuting(false);
     }
   };
 
-  // ── Microphone (Web Speech API) ───────────────────────────────────────────
+  // ── Microphone ────────────────────────────────────────────────────────────
   const toggleMic = useCallback(() => {
     if (!SpeechRecognition) {
       setError("Your browser doesn't support voice input. Try Chrome.");
       return;
     }
-
     if (listening) {
       recogRef.current?.stop();
       setListening(false);
       return;
     }
 
-    const recog = new SpeechRecognition();
-    recog.lang             = "en-US";
-    recog.interimResults   = false;
-    recog.maxAlternatives  = 1;
+    const recog          = new SpeechRecognition();
+    recog.lang           = "en-US";
+    recog.interimResults = false;
+    recog.maxAlternatives = 1;
 
     recog.onresult = (e) => {
       const transcript = e.results[0][0].transcript;
       setInput(transcript);
       setListening(false);
-      // Auto-send after a short delay so user sees what was transcribed
       setTimeout(() => send(transcript), 300);
     };
-
     recog.onerror = (e) => {
       setListening(false);
       if (e.error !== "no-speech") {
         setError(`Mic error: ${e.error}. Check browser permissions.`);
       }
     };
-
     recog.onend = () => setListening(false);
 
     recogRef.current = recog;
@@ -186,6 +278,7 @@ export default function Voice() {
     setError(null);
   }, [listening, send]);
 
+  // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="max-w-3xl mx-auto px-4 py-8 space-y-6">
 
@@ -194,7 +287,10 @@ export default function Voice() {
         <div className="flex items-center gap-3">
           <span className="mono text-sm font-semibold">{agent.name}</span>
           <Badge variant="blue">{agent.strategy}</Badge>
-          <Badge variant={agent.risk_tolerance === "HIGH" ? "red" : agent.risk_tolerance === "LOW" ? "green" : "yellow"}>
+          <Badge variant={
+            agent.risk_tolerance === "HIGH" ? "red" :
+            agent.risk_tolerance === "LOW"  ? "green" : "yellow"
+          }>
             {agent.risk_tolerance}
           </Badge>
         </div>
@@ -228,7 +324,7 @@ export default function Voice() {
 
       <SectionTitle>Voice AI Trader</SectionTitle>
 
-      {/* Input + Mic */}
+      {/* Input + controls */}
       <Card>
         <div className="flex gap-2">
           <input
@@ -257,6 +353,61 @@ export default function Voice() {
           <ActionBtn onClick={() => send()} loading={loading} disabled={!input.trim() || executing}>
             Send
           </ActionBtn>
+        </div>
+
+        {/* TTS controls row */}
+        <div className="flex items-center gap-3 mt-3 flex-wrap">
+          {/* TTS toggle */}
+          <button
+            onClick={() => { setTtsEnabled((v) => !v); if (speaking) stop(); }}
+            className={`text-xs mono px-2 py-1 rounded border transition-colors ${
+              ttsEnabled
+                ? "border-green/30 bg-green/10 text-green"
+                : "border-border bg-muted text-dim"
+            }`}
+            title="Toggle text-to-speech"
+          >
+            {ttsEnabled ? "🔊 Voice On" : "🔇 Voice Off"}
+          </button>
+
+          {/* Stop speaking */}
+          {speaking && (
+            <button
+              onClick={stop}
+              className="text-xs mono px-2 py-1 rounded border border-red/30 bg-red/10 text-red transition-colors"
+            >
+              ⏹ Stop Speaking
+            </button>
+          )}
+
+          {/* Speaking indicator */}
+          {speaking && (
+            <span className="text-xs mono text-green flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-green inline-block pulse" />
+              Speaking...
+            </span>
+          )}
+
+          {/* Voice selector (if multiple voices available) */}
+          {voices.length > 1 && ttsEnabled && (
+            <select
+              value={ttsVoice?.name || ""}
+              onChange={(e) => {
+                const v = voices.find((x) => x.name === e.target.value);
+                if (v) setTtsVoice(v);
+              }}
+              className="text-xs mono bg-bg border border-border rounded px-2 py-1 text-dim focus:outline-none"
+              title="Select TTS voice"
+            >
+              {voices
+                .filter((v) => v.lang.startsWith("en"))
+                .map((v) => (
+                  <option key={v.name} value={v.name}>
+                    {v.name}
+                  </option>
+                ))}
+            </select>
+          )}
         </div>
 
         {listening && (
@@ -306,7 +457,7 @@ export default function Voice() {
         </Card>
       )}
 
-      {/* Response from voice command */}
+      {/* AI Response */}
       {response && (
         <Card>
           <div className="flex items-center gap-2 mb-3 flex-wrap">
@@ -320,55 +471,113 @@ export default function Voice() {
               </span>
             )}
             {sigStatus === "signed" && <Badge variant="green">MetaMask ✓</Badge>}
+
+            {/* Re-speak button */}
+            <button
+              onClick={() => speak(response.explanation)}
+              disabled={speaking}
+              className="ml-auto text-xs mono px-2 py-0.5 rounded border border-border text-dim hover:text-text transition-colors disabled:opacity-40"
+              title="Replay audio"
+            >
+              🔊 Replay
+            </button>
           </div>
 
           <p className="text-sm text-text leading-relaxed mb-3">{response.explanation}</p>
 
-          {/* AI Decision details */}
+          {/* AI Decision detail cards */}
           {response.decision && (
             <div className="bg-bg border border-border rounded p-3 space-y-2">
               <p className="text-xs text-dim mono font-semibold">AI Analysis</p>
               <div className="grid grid-cols-2 gap-1 text-xs mono">
-                <div className="flex justify-between bg-surface rounded p-1.5 border border-border/50">
-                  <span className="text-dim">Action</span>
-                  <Badge variant={actionColor(response.decision.action)}>
-                    {response.decision.action}
-                  </Badge>
-                </div>
-                <div className="flex justify-between bg-surface rounded p-1.5 border border-border/50">
-                  <span className="text-dim">Confidence</span>
-                  <span className="text-text">{response.decision.confidence}%</span>
-                </div>
-                <div className="flex justify-between bg-surface rounded p-1.5 border border-border/50">
-                  <span className="text-dim">Risk Level</span>
-                  <span className={
-                    response.decision.risk_level === "HIGH" ? "text-red" :
-                    response.decision.risk_level === "LOW"  ? "text-green" : "text-yellow"
-                  }>
-                    {response.decision.risk_level}
-                  </span>
-                </div>
-                <div className="flex justify-between bg-surface rounded p-1.5 border border-border/50">
-                  <span className="text-dim">Amount</span>
-                  <span className="text-text">${response.decision.amount_usd}</span>
-                </div>
+                {[
+                  {
+                    label: "Action",
+                    val: <Badge variant={actionColor(response.decision.action)}>{response.decision.action}</Badge>,
+                  },
+                  { label: "Confidence", val: `${response.decision.confidence}%` },
+                  {
+                    label: "Risk Level",
+                    val: response.decision.risk_level,
+                    color:
+                      response.decision.risk_level === "HIGH" ? "text-red" :
+                      response.decision.risk_level === "LOW"  ? "text-green" : "text-yellow",
+                  },
+                  { label: "Amount", val: `$${response.decision.amount_usd}` },
+                ].map(({ label, val, color }) => (
+                  <div
+                    key={label}
+                    className="flex justify-between bg-surface rounded p-1.5 border border-border/50"
+                  >
+                    <span className="text-dim">{label}</span>
+                    {typeof val === "string"
+                      ? <span className={color || "text-text"}>{val}</span>
+                      : val}
+                  </div>
+                ))}
               </div>
 
-              {/* Indicators */}
+              {/* Indicator grid — RSI, MA7, MA25, Sentiment, 24h Change */}
               {response.decision.indicators && (
-                <div className="grid grid-cols-2 gap-1 text-xs mono mt-1">
+                <div className="grid grid-cols-3 sm:grid-cols-5 gap-1 text-xs mono mt-1">
                   {[
-                    { label: "RSI",       val: response.decision.indicators.rsi?.toFixed(1) },
-                    { label: "Sentiment", val: response.decision.indicators.sentiment?.toFixed(3) },
-                  ].map(({ label, val }) => (
-                    <div key={label} className="text-dim">
-                      {label}: <span className="text-text">{val ?? "—"}</span>
+                    {
+                      label: "RSI",
+                      val:   response.decision.indicators.rsi?.toFixed(1),
+                      color: response.decision.indicators.rsi < 30 ? "text-green"
+                           : response.decision.indicators.rsi > 70 ? "text-red" : "",
+                    },
+                    {
+                      label: "MA7",
+                      val:   response.decision.indicators.ma_7 != null
+                               ? `$${Number(response.decision.indicators.ma_7).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+                               : null,
+                    },
+                    {
+                      label: "MA25",
+                      val:   response.decision.indicators.ma_25 != null
+                               ? `$${Number(response.decision.indicators.ma_25).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+                               : null,
+                    },
+                    {
+                      label: "Sentiment",
+                      val:   response.decision.indicators.sentiment?.toFixed(3),
+                      color: response.decision.indicators.sentiment >  0.3 ? "text-green"
+                           : response.decision.indicators.sentiment < -0.3 ? "text-red" : "",
+                    },
+                    {
+                      label: "24h Δ",
+                      val:   response.decision.indicators.price_change_24h != null
+                               ? `${response.decision.indicators.price_change_24h >= 0 ? "+" : ""}${response.decision.indicators.price_change_24h?.toFixed(2)}%`
+                               : null,
+                      color: (response.decision.indicators.price_change_24h ?? 0) >= 0
+                               ? "text-green" : "text-red",
+                    },
+                  ].map(({ label, val, color }) => (
+                    <div key={label} className="bg-surface rounded p-1.5 border border-border/50">
+                      <p className="text-dim">{label}</p>
+                      <p className={`font-medium ${color || "text-text"}`}>{val ?? "—"}</p>
                     </div>
                   ))}
                 </div>
               )}
 
-              {/* Execute button — only for trade intents */}
+              {/* Signals breakdown */}
+              {response.decision.indicators?.signals &&
+                Object.keys(response.decision.indicators.signals).length > 0 && (
+                <div className="pt-2 border-t border-border mt-1">
+                  <p className="text-xs text-dim mono mb-1">Signals</p>
+                  <div className="flex flex-wrap gap-1">
+                    {Object.entries(response.decision.indicators.signals).map(([k, v]) => (
+                      <span key={k} className="text-xs mono px-2 py-0.5 rounded bg-muted text-dim">
+                        {v}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Execute button — only for non-HOLD trade intents */}
               {response.intent === "trade" && response.decision.action !== "HOLD" && (
                 <div className="pt-2 border-t border-border mt-2">
                   <ActionBtn
@@ -380,7 +589,8 @@ export default function Voice() {
                     ⚡ Execute This Trade
                   </ActionBtn>
                   <p className="text-xs text-dim mono mt-1">
-                    Executes {response.decision.action} {response.token?.toUpperCase()} · ${response.decision.amount_usd} · Requires MetaMask signature
+                    {response.decision.action} {response.token?.toUpperCase()} ·
+                    ${response.decision.amount_usd} · Requires MetaMask signature
                   </p>
                 </div>
               )}
@@ -389,12 +599,19 @@ export default function Voice() {
         </Card>
       )}
 
-      {/* Trade Execution Result */}
+      {executing && !sigStatus && (
+        <div className="flex justify-center py-6"><Spinner size={6} /></div>
+      )}
+
+      {/* Trade result */}
       {tradeResult && (
         <Card>
           <SectionTitle>Trade Executed</SectionTitle>
           <div className="flex items-center gap-3 mb-3 flex-wrap">
-            <Badge variant={tradeResult.status === "EXECUTED" ? "green" : tradeResult.status === "REJECTED" ? "red" : "yellow"}>
+            <Badge variant={
+              tradeResult.status === "EXECUTED" ? "green" :
+              tradeResult.status === "REJECTED" ? "red" : "yellow"
+            }>
               {tradeResult.status}
             </Badge>
             <Badge variant={actionColor(tradeResult.action)}>{tradeResult.action}</Badge>
@@ -403,8 +620,11 @@ export default function Voice() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs mono">
             {[
               { label: "Amount",     val: `$${tradeResult.amount_usd}` },
-              { label: "PnL",        val: tradeResult.pnl != null ? `$${tradeResult.pnl?.toFixed(4)}` : "—",
-                color: (tradeResult.pnl ?? 0) >= 0 ? "text-green" : "text-red" },
+              {
+                label: "PnL",
+                val:   tradeResult.pnl != null ? `$${tradeResult.pnl.toFixed(4)}` : "—",
+                color: (tradeResult.pnl ?? 0) >= 0 ? "text-green" : "text-red",
+              },
               { label: "Risk Check", val: tradeResult.risk_check?.toUpperCase() },
               { label: "Confidence", val: `${tradeResult.confidence}%` },
             ].map(({ label, val, color }) => (
@@ -424,7 +644,6 @@ export default function Voice() {
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-xs text-blue hover:underline mono"
-                title={tradeResult.on_chain_id}
               >
                 {tradeResult.on_chain_id.startsWith("0x")
                   ? `${tradeResult.on_chain_id.slice(0, 22)}…`
@@ -443,14 +662,19 @@ export default function Voice() {
             {history.map((h, i) => (
               <div
                 key={i}
-                className="bg-surface border border-border rounded-lg px-3 py-2 flex items-start gap-3"
+                className="bg-surface border border-border rounded-lg px-3 py-2 flex items-start gap-3 cursor-pointer hover:border-muted transition-colors"
+                onClick={() => speak(h.r.explanation)}
+                title="Click to replay audio"
               >
                 <span className="text-xs text-dim mono flex-shrink-0 mt-0.5">{h.ts}</span>
                 <div className="flex-1 min-w-0">
                   <p className="text-xs mono text-green">"{h.cmd}"</p>
                   <p className="text-xs text-dim mono truncate mt-0.5">{h.r.explanation}</p>
                 </div>
-                <Badge variant="blue">{h.r.intent}</Badge>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <Badge variant="blue">{h.r.intent}</Badge>
+                  <span className="text-dim text-xs" title="Replay">🔊</span>
+                </div>
               </div>
             ))}
           </div>
