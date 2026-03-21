@@ -31,7 +31,8 @@ from models.schemas import (
 )
 from services.blockchain import blockchain_service
 from services.market_data import fetch_current_market_data, normalise_token
-from services.risk_manager import risk_manager
+from services.risk_manager import risk_manager, RiskManager
+from api.dashboard import _compute_risk_metrics, VAULT_INITIAL  # reuse analytics
 
 
 class TradeExecutionService:
@@ -40,23 +41,46 @@ class TradeExecutionService:
         db       = get_db()
         trade_id = str(uuid.uuid4())
 
-        # ── Step 1: Off-chain risk check ──────────────────────────────────────
-        risk_result  = risk_manager.check_trade(decision, agent)
+        # ── Pre-check: get live drawdown / daily loss from DB ─────────────────
+        current_drawdown_pct, daily_loss_pct, vault_balance = \
+            await self._get_risk_state(db, agent.wallet_address)
+
+        # ── Step 1: Off-chain risk check (with circuit breaker) ───────────────
+        risk_result  = risk_manager.check_trade(
+            decision, agent,
+            current_drawdown_pct=current_drawdown_pct,
+            daily_loss_pct=daily_loss_pct,
+        )
         risk_status  = "passed" if risk_result.passed else "failed"
         final_amount = risk_result.adjusted_amount
 
+        # ATR-based position sizing (uses market data fetched later, pre-compute)
+        atr              = decision.indicators.get("atr") if decision.indicators else None
+        price            = decision.indicators.get("price") if decision.indicators else None
+        pos_size_pct     = None
+        stop_loss_usd    = None
+        if atr and price and vault_balance > 0:
+            pos_size_usd  = RiskManager.atr_position_size(vault_balance, 1.5, atr, price)
+            pos_size_pct  = round(pos_size_usd / vault_balance * 100, 2)
+            stop_loss_usd = round(price - atr * 1.5, 4)  # 1.5 ATR stop
+            # Use ATR size if smaller than AI decision amount
+            final_amount  = min(final_amount, pos_size_usd)
+
         intent = TradeIntent(
-            id             = trade_id,
-            wallet_address = agent.wallet_address,
-            agent_id       = agent.id or agent.wallet_address,
-            token_pair     = decision.token_pair,
-            action         = decision.action,
-            amount_usd     = final_amount,
-            reason         = decision.reason,
-            confidence     = decision.confidence,
-            risk_level     = decision.risk_level,
-            risk_check     = risk_status,
-            status         = TradeStatus.PENDING if risk_result.passed else TradeStatus.REJECTED,
+            id                = trade_id,
+            wallet_address    = agent.wallet_address,
+            agent_id          = agent.id or agent.wallet_address,
+            token_pair        = decision.token_pair,
+            action            = decision.action,
+            amount_usd        = final_amount,
+            reason            = decision.reason,
+            confidence        = decision.confidence,
+            risk_level        = decision.risk_level,
+            risk_check        = risk_status,
+            status            = TradeStatus.PENDING if risk_result.passed else TradeStatus.REJECTED,
+            atr               = atr,
+            position_size_pct = pos_size_pct,
+            stop_loss_usd     = stop_loss_usd,
         )
 
         if not risk_result.passed:
@@ -229,6 +253,51 @@ class TradeExecutionService:
 
     # ── DB helpers ────────────────────────────────────────────────────────────
 
+    async def _get_risk_state(
+        self,
+        db,
+        wallet_address: str,
+    ) -> tuple[float, float, float]:
+        """
+        Query DB to get (current_drawdown_pct, daily_loss_pct, vault_balance).
+        Called before every trade to power the circuit breaker.
+        """
+        from datetime import datetime
+        from api.dashboard import _compute_risk_metrics, VAULT_INITIAL
+
+        try:
+            cursor = (
+                db["trades"]
+                .find({"wallet_address": wallet_address, "status": "EXECUTED"})
+                .sort("created_at", 1)
+            )
+            trades = await cursor.to_list(1000)
+
+            _, _, _, current_dd_pct = _compute_risk_metrics(trades, VAULT_INITIAL)
+            current_dd_pct = current_dd_pct or 0.0
+
+            vault_balance = VAULT_INITIAL + sum(t.get("pnl", 0) or 0 for t in trades)
+
+            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            daily_loss_usd = sum(
+                abs(t.get("pnl", 0) or 0)
+                for t in trades
+                if (t.get("pnl") or 0) < 0
+                and (t.get("created_at") or datetime.utcnow()) >= today_start
+            )
+            daily_loss_pct = (daily_loss_usd / vault_balance * 100) if vault_balance > 0 else 0.0
+
+            # Keep vault_balance on agent document
+            await db["agents"].update_one(
+                {"wallet_address": wallet_address},
+                {"$set": {"vault_balance": round(vault_balance, 2)}},
+            )
+
+            return current_dd_pct, daily_loss_pct, vault_balance
+        except Exception as exc:
+            logger.warning(f"_get_risk_state failed (non-fatal): {exc}")
+            return 0.0, 0.0, VAULT_INITIAL
+
     async def _save_trade(self, db, intent: TradeIntent) -> None:
         try:
             data     = intent.model_dump()
@@ -253,4 +322,4 @@ class TradeExecutionService:
             logger.warning(f"Could not update agent stats (non-fatal): {exc}")
 
 
-trade_execution_service = TradeExecutionService()
+trade_execution_service = TradeExecutionService()
