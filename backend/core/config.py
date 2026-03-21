@@ -1,6 +1,6 @@
 from pydantic_settings import BaseSettings
 from functools import lru_cache
-
+import os
 
 class Settings(BaseSettings):
     # App
@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     debug:    bool = True
 
     # Groq
-    groq_api_key: str = ""
+    groq_api_key: str = os.getenv("GROQ_API_KEY","")
 
     # MongoDB
     mongodb_url: str = "mongodb://localhost:27017"
@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     reputation_manager_address:   str = ""   # ← was missing before
 
     # Market Data
-    coingecko_api_key:  str = ""
+    coingecko_api_key:  str = os.getenv("COINGECKO_API_KEY", "")
     coingecko_base_url: str = "https://api.coingecko.com/api/v3"
 
     # Security

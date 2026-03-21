@@ -1,1 +1,42 @@
 @import "tailwindcss";
+
+/* ── Design Tokens ────────────────────────────────────────────── */
+@theme {
+  --color-bg:      #0a0a0f;
+  --color-surface: #111118;
+  --color-border:  #1e1e2e;
+  --color-muted:   #1a1a28;
+  --color-text:    #e2e2f0;
+  --color-dim:     #6b6b8a;
+
+  /* brand colours */
+  --color-green:  #22d3a0;
+  --color-red:    #f87171;
+  --color-yellow: #fbbf24;
+  --color-blue:   #60a5fa;
+}
+
+/* ── Base ─────────────────────────────────────────────────────── */
+* { box-sizing: border-box; }
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Mono helper ──────────────────────────────────────────────── */
+.mono { font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace; }
+
+/* ── Pulse animation (used for wallet online dot) ─────────────── */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+.pulse { animation: pulse-dot 1.8s ease-in-out infinite; }
+
+/* ── Scrollbar ────────────────────────────────────────────────── */
+::-webkit-scrollbar       { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: var(--color-bg); }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 2px; }

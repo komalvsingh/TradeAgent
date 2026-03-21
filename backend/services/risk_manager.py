@@ -23,7 +23,7 @@ class RiskManager:
     HIGH_RISK_CONFIDENCE_THRESHOLD = 70.0   # higher bar for HIGH risk trades
 
     ALLOWED_TOKENS = {
-        "ethereum", "bitcoin", "matic-network",
+        "ethereum", "bitcoin", "polygon-ecosystem-token",
         "chainlink", "uniswap", "aave",
     }
 

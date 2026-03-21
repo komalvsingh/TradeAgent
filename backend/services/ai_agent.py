@@ -269,7 +269,7 @@ async def parse_voice_command(text: str) -> Dict[str, Any]:
     token_keywords = {
         "ethereum": "ethereum", "eth": "ethereum",
         "bitcoin": "bitcoin", "btc": "bitcoin",
-        "matic": "matic-network", "polygon": "matic-network",
+        "matic": "polygon-ecosystem-token", "polygon": "polygon-ecosystem-token", "pol": "polygon-ecosystem-token",
         "link": "chainlink", "chainlink": "chainlink",
         "uni": "uniswap", "uniswap": "uniswap",
     }

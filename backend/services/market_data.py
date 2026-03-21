@@ -21,7 +21,7 @@ settings = get_settings()
 TOKEN_MAP = {
     "ethereum":      "ETH",
     "bitcoin":       "BTC",
-    "matic-network": "MATIC",
+    "polygon-ecosystem-token": "POL",
     "chainlink":     "LINK",
     "uniswap":       "UNI",
     "aave":          "AAVE",

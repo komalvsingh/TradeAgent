@@ -10,10 +10,10 @@ import {
 
 // ── Deployed contract addresses (Sepolia) ────────────────────────────────────
 const ADDRESSES = {
-  AgentRegistry:      import.meta.env.REACT_APP_AGENT_REGISTRY_ADDRESS      || "",
-  ValidationRegistry: import.meta.env.REACT_APP_VALIDATION_REGISTRY_ADDRESS  || "",
-  RiskRouter:         import.meta.env.REACT_APP_RISK_ROUTER_ADDRESS           || "",
-  ReputationManager:  import.meta.env.REACT_APP_REPUTATION_MANAGER_ADDRESS    || "",
+  AgentRegistry:      import.meta.env.VITE_AGENT_REGISTRY_ADDRESS      || "",
+  ValidationRegistry: import.meta.env.VITE_VALIDATION_REGISTRY_ADDRESS  || "",
+  RiskRouter:         import.meta.env.VITE_RISK_ROUTER_ADDRESS           || "",
+  ReputationManager:  import.meta.env.VITE_REPUTATION_MANAGER_ADDRESS    || "",
 };
 
 const ContractContext = createContext(null);

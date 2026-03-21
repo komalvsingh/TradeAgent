@@ -100,8 +100,6 @@ export function Input({ label, value, onChange, placeholder, type = "text", opti
 }
 
 export function WalletGuard({ children }) {
-  const { useWallet } = require("../context/WalletContext");
-  // inline usage below — exported separately
   return children;
 }
 
@@ -112,4 +110,4 @@ export function ConnectPrompt() {
       <p className="text-sm text-dim mono">Connect your wallet to get started</p>
     </div>
   );
-}
+}

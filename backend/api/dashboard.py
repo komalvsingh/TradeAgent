@@ -81,7 +81,7 @@ async def build_risk_heatmap(wallet_address: str) -> list[RiskHeatmapEntry]:
     # Fetch live market data for risk scoring
     token_id_map = {
         "eth": "ethereum", "btc": "bitcoin",
-        "matic": "matic-network", "link": "chainlink",
+        "matic": "polygon-ecosystem-token", "link": "chainlink",
     }
     token_ids = [token_id_map.get(k, k) for k in exposure_map.keys()]
     market_data = await fetch_multi_token_market_data(token_ids[:4])

@@ -129,7 +129,7 @@ function TokenCard({ tokenId, index }) {
 const TOKEN_LABELS = {
   "ethereum":      "Ethereum",
   "bitcoin":       "Bitcoin",
-  "matic-network": "Polygon",
+  "polygon-ecosystem-token": "Polygon (POL)",
   "chainlink":     "Chainlink",
   "uniswap":       "Uniswap",
   "aave":          "Aave",

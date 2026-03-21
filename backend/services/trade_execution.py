@@ -69,6 +69,28 @@ class TradeExecutionService:
             return intent
         logger.info(f"RiskRouter: {token_symbol} allowed ✅")
 
+        # ── Step 2b: EIP-712 sign + RiskRouter.submitTrade() on-chain ─────────
+        if decision.action.value != "HOLD":
+            approved, risk_router_tx = await blockchain_service.submit_trade_to_risk_router(
+                agent_id   = intent.agent_id,
+                token_pair = decision.token_pair,
+                action     = decision.action.value,
+                amount_usd = final_amount,
+                confidence = decision.confidence,
+                reason     = decision.reason,
+            )
+            if not approved:
+                logger.warning(f"Trade {trade_id} rejected by RiskRouter.submitTrade()")
+                intent.status     = TradeStatus.REJECTED
+                intent.risk_check = "failed"
+                await self._save_trade(db, intent)
+                return intent
+            if risk_router_tx:
+                # Store the RiskRouter approval tx as the primary on-chain ID
+                intent.on_chain_id = risk_router_tx
+                logger.info(f"RiskRouter approval tx: {risk_router_tx}")
+
+
         # ── Step 3: Fetch market data ONCE ────────────────────────────────────
         # The AI decision service already fetched this — it's in cache (60s TTL)
         # so this is effectively free (instant cache hit, no API call)

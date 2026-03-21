@@ -55,12 +55,12 @@ export default function Trade() {
       .catch(() => {
         // Fallback token list matching backend
         setTokens([
-          { value: "ethereum",      label: "Ethereum"  },
-          { value: "bitcoin",       label: "Bitcoin"   },
-          { value: "matic-network", label: "Polygon"   },
-          { value: "chainlink",     label: "Chainlink" },
-          { value: "uniswap",       label: "Uniswap"   },
-          { value: "aave",          label: "Aave"      },
+          { value: "ethereum",                  label: "Ethereum"  },
+          { value: "bitcoin",                   label: "Bitcoin"   },
+          { value: "polygon-ecosystem-token",   label: "Polygon (POL)" },
+          { value: "chainlink",                 label: "Chainlink" },
+          { value: "uniswap",                   label: "Uniswap"   },
+          { value: "aave",                      label: "Aave"      },
         ]);
       });
   }, []);
@@ -278,11 +278,11 @@ export default function Trade() {
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {[
-                { label: "RSI (14)",  val: decision.indicators?.rsi?.toFixed(1),
+                { label: "RSI (14)",  val: decision.indicators?.rsi != null ? decision.indicators.rsi.toFixed(1) : null,
                   color: decision.indicators?.rsi < 30 ? "text-green" : decision.indicators?.rsi > 70 ? "text-red" : "" },
-                { label: "MA7",       val: `$${decision.indicators?.ma_7?.toFixed(2)}` },
-                { label: "MA25",      val: `$${decision.indicators?.ma_25?.toFixed(2)}` },
-                { label: "Sentiment", val: decision.indicators?.sentiment?.toFixed(4),
+                { label: "MA7",       val: decision.indicators?.ma_7  != null ? `$${decision.indicators.ma_7.toFixed(2)}`  : null },
+                { label: "MA25",      val: decision.indicators?.ma_25 != null ? `$${decision.indicators.ma_25.toFixed(2)}` : null },
+                { label: "Sentiment", val: decision.indicators?.sentiment != null ? decision.indicators.sentiment.toFixed(4) : null,
                   color: decision.indicators?.sentiment > 0.3 ? "text-green" : decision.indicators?.sentiment < -0.3 ? "text-red" : "" },
               ].map(({ label, val, color }) => (
                 <div key={label} className="bg-bg rounded p-2 border border-border">
@@ -354,17 +354,22 @@ export default function Trade() {
               </p>
             )}
             {result.on_chain_id && (
-              <p className="text-xs text-dim mono break-all mt-1">
-                On-chain proof:{" "}
+              <div className="mt-2 flex items-center gap-2 flex-wrap">
+                <span className="text-xs mono px-1.5 py-0.5 rounded bg-green/10 text-green border border-green/20">
+                  ⛓ RiskRouter Approved
+                </span>
                 <a
                   href={`https://sepolia.etherscan.io/tx/${result.on_chain_id}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-blue hover:underline"
+                  className="text-xs text-blue hover:underline mono"
+                  title={result.on_chain_id}
                 >
-                  {result.on_chain_id.slice(0, 20)}...
+                  {result.on_chain_id.startsWith("0x")
+                    ? `${result.on_chain_id.slice(0, 22)}…`
+                    : result.on_chain_id}
                 </a>
-              </p>
+              </div>
             )}
           </Card>
         </div>
