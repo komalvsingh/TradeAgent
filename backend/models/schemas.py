@@ -89,6 +89,10 @@ class TradeIntent(BaseModel):
     tx_hash: Optional[str] = None
     on_chain_id: Optional[str] = None
     pnl: Optional[float] = None
+    # ── Enhanced validation artifact fields ────────────────────────────────
+    atr: Optional[float] = None              # ATR at time of trade
+    position_size_pct: Optional[float] = None  # % of vault used
+    stop_loss_usd: Optional[float] = None    # computed stop loss price
     created_at: datetime = Field(default_factory=datetime.utcnow)
     executed_at: Optional[datetime] = None
 
@@ -115,6 +119,7 @@ class Agent(BaseModel):
     total_trades: int = 0
     profitable_trades: int = 0
     total_pnl: float = 0.0
+    vault_balance: float = 10_000.0   # virtual USDC sandbox vault balance
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -170,3 +175,15 @@ class DashboardStats(BaseModel):
     win_rate: float
     recent_trades: List[TradeIntent]
     risk_heatmap: List[RiskHeatmapEntry]
+    # ── Risk-adjusted metrics (hackathon judging criteria) ─────────────────
+    sharpe_ratio: Optional[float] = None      # annualised Sharpe (risk-free=0)
+    max_drawdown: Optional[float] = None      # worst peak→trough drawdown in $
+    max_drawdown_pct: Optional[float] = None  # as % of peak equity
+    current_drawdown: Optional[float] = None  # current drawdown from peak
+    circuit_breaker_active: bool = False       # True when trading is halted
+    # ── Vault accounting ───────────────────────────────────────────────────
+    vault_balance: float = 10_000.0           # virtual USDC in sandbox vault
+    vault_initial: float = 10_000.0           # starting capital
+    daily_loss_usd: float = 0.0               # loss today
+    daily_loss_pct: float = 0.0               # daily loss as % of vault
+    equity_curve: List[dict] = Field(default_factory=list)  # [{ts, equity}]
