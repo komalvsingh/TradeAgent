@@ -2,21 +2,23 @@
 pragma solidity ^0.8.24;
 
 import "./AgentRegistry.sol";
+import "./Interfaces.sol";
 
 /**
  * @title RiskRouter
  * @notice On-chain risk gatekeeper for AI trading agents.
  *
  *         Before any trade executes, the RiskRouter:
- *         1. Verifies the EIP-712 signature from the agent's wallet
- *         2. Checks trade limits (single trade + daily loss)
- *         3. Verifies the token is in the allowed list
- *         4. Emits TradeApproved / TradeRejected for indexers
- *
- *         Trade execution itself happens off-chain (DEX router call)
- *         but all approvals are permanently recorded here.
+ *         1. Verifies the EIP-712 signature — ECDSA first, EIP-1271 fallback
+ *            for contract wallets (Safe, AA wallets)
+ *         2. Compares signer to the agent owner recorded in AgentRegistry
+ *         3. Checks trade limits (single trade + daily loss)
+ *         4. Verifies the token is in the allowed list
+ *         5. Emits TradeApproved / TradeRejected for indexers
+ *         6. Optionally calls the DEX router for on-chain execution
  */
 contract RiskRouter {
+
     // ── Events ────────────────────────────────────────────────────────────────
     event TradeApproved(
         uint256 indexed agentId,
@@ -31,44 +33,59 @@ contract RiskRouter {
         bytes32 tradeHash,
         string  reason
     );
+    event TradeExecuted(
+        uint256 indexed agentId,
+        bytes32 tradeHash,
+        uint256[] amounts
+    );
     event TokenAllowlistUpdated(string token, bool allowed);
     event LimitsUpdated(uint256 maxSingleTradeUsd, uint256 maxDailyLossUsd);
+    event DEXRouterUpdated(address dexRouter);
 
     // ── Structs ───────────────────────────────────────────────────────────────
     struct TradeIntent {
         uint256 agentId;
         string  tokenPair;    // e.g. "ETH/USDC"
         string  action;       // "BUY" | "SELL"
-        uint256 amountUsd;    // in USD cents to avoid decimals (e.g. 10000 = $100)
+        uint256 amountUsd;    // in USD cents (e.g. 10000 = $100)
         uint256 confidence;   // 0-100
         string  reason;
         uint256 nonce;
         uint256 deadline;
+        // DEX execution params (optional; zero = off-chain execution)
+        address tokenIn;
+        address tokenOut;
+        uint256 amountIn;
+        uint256 amountOutMin;
     }
 
     struct DailyStats {
-        uint256 date;         // block.timestamp / 86400
+        uint256 date;
         uint256 totalLossUsd;
         uint256 tradeCount;
     }
 
     // ── State ─────────────────────────────────────────────────────────────────
     AgentRegistry public agentRegistry;
+    IDEXRouter    public dexRouter;
     address public owner;
 
-    uint256 public maxSingleTradeUsd = 5_000 * 100;  // $5,000 in cents
-    uint256 public maxDailyLossUsd   = 10_000 * 100; // $10,000 in cents
+    uint256 public maxSingleTradeUsd = 5_000 * 100;   // $5,000 in cents
+    uint256 public maxDailyLossUsd   = 10_000 * 100;  // $10,000 in cents
     uint256 public minConfidence      = 45;
 
-    mapping(string => bool) public allowedTokens;
-    mapping(uint256 => DailyStats) public agentDailyStats; // agentId → stats
-    mapping(bytes32 => bool) public processedTrades;        // prevent replay
-    mapping(uint256 => uint256) public agentNonces;
+    bytes4 internal constant ERC1271_MAGIC_VALUE = 0x1626ba7e;
 
-    // EIP-712 domain separator
+    mapping(string  => bool)       public allowedTokens;
+    mapping(uint256 => DailyStats) public agentDailyStats;
+    mapping(bytes32 => bool)       public processedTrades;
+    mapping(uint256 => uint256)    public agentNonces;
+
     bytes32 public immutable DOMAIN_SEPARATOR;
     bytes32 public constant TRADE_TYPEHASH = keccak256(
-        "TradeIntent(uint256 agentId,string tokenPair,string action,uint256 amountUsd,uint256 confidence,string reason,uint256 nonce,uint256 deadline)"
+        "TradeIntent(uint256 agentId,string tokenPair,string action,uint256 amountUsd,"
+        "uint256 confidence,string reason,uint256 nonce,uint256 deadline,"
+        "address tokenIn,address tokenOut,uint256 amountIn,uint256 amountOutMin)"
     );
 
     modifier onlyOwner() {
@@ -77,16 +94,17 @@ contract RiskRouter {
     }
 
     constructor(address _agentRegistry) {
-        owner = msg.sender;
+        owner         = msg.sender;
         agentRegistry = AgentRegistry(_agentRegistry);
 
-        // Seed allowlist
         allowedTokens["ETH"]   = true;
         allowedTokens["BTC"]   = true;
         allowedTokens["MATIC"] = true;
         allowedTokens["LINK"]  = true;
         allowedTokens["UNI"]   = true;
         allowedTokens["AAVE"]  = true;
+        allowedTokens["USDC"]  = true;
+        allowedTokens["WETH"]  = true;
 
         DOMAIN_SEPARATOR = keccak256(
             abi.encode(
@@ -99,40 +117,35 @@ contract RiskRouter {
         );
     }
 
-    // ── Core: validate + approve a trade ─────────────────────────────────────
+    // ── Core ──────────────────────────────────────────────────────────────────
 
     /**
      * @notice Submit a signed trade intent for risk validation.
-     * @param intent  The trade parameters.
-     * @param v,r,s   EIP-712 signature from the agent wallet.
-     * @return approved Whether the trade passed all risk checks.
-     * @return tradeHash Unique hash for this trade (used for replay protection).
+     * @param intent    The trade parameters.
+     * @param signature Raw EIP-712 signature (65-byte ECDSA or EIP-1271 bytes).
+     * @return approved  Whether the trade passed all risk checks.
+     * @return tradeHash Unique hash for this trade.
      */
     function submitTrade(
         TradeIntent calldata intent,
-        uint8  v,
-        bytes32 r,
-        bytes32 s
+        bytes calldata signature
     ) external returns (bool approved, bytes32 tradeHash) {
-        // ── Deadline check ────────────────────────────────────────────────────
         require(block.timestamp <= intent.deadline, "RiskRouter: trade expired");
-
-        // ── Nonce / replay protection ─────────────────────────────────────────
         require(
             intent.nonce == agentNonces[intent.agentId],
             "RiskRouter: invalid nonce"
         );
 
-        // ── Compute and check trade hash ──────────────────────────────────────
         tradeHash = _hashTrade(intent);
         require(!processedTrades[tradeHash], "RiskRouter: already processed");
 
-        // ── Signature verification (EIP-712) ──────────────────────────────────
-        address signer = _recoverSigner(tradeHash, v, r, s);
-        // (In production, compare signer to agent owner from AgentRegistry)
-        require(signer != address(0), "RiskRouter: invalid signature");
+        // ── Signer MUST be the agent owner (ECDSA + EIP-1271 fallback) ────────
+        address agentOwner = _getAgentOwner(intent.agentId);
+        require(
+            _isValidSignature(agentOwner, tradeHash, signature),
+            "RiskRouter: signer is not agent owner"
+        );
 
-        // ── Risk checks ───────────────────────────────────────────────────────
         (bool passed, string memory rejectReason) = _runRiskChecks(intent);
 
         processedTrades[tradeHash] = true;
@@ -142,12 +155,23 @@ contract RiskRouter {
             _updateDailyStats(intent);
             emit TradeApproved(
                 intent.agentId,
-                signer,
+                agentOwner,
                 tradeHash,
                 intent.tokenPair,
                 intent.action,
                 intent.amountUsd
             );
+
+            // Optional on-chain DEX execution
+            if (
+                address(dexRouter) != address(0) &&
+                intent.tokenIn  != address(0)    &&
+                intent.tokenOut != address(0)    &&
+                intent.amountIn > 0
+            ) {
+                _executeDEXSwap(intent, tradeHash, agentOwner);
+            }
+
             return (true, tradeHash);
         } else {
             emit TradeRejected(intent.agentId, tradeHash, rejectReason);
@@ -157,58 +181,104 @@ contract RiskRouter {
 
     // ── Internal helpers ──────────────────────────────────────────────────────
 
-    function _runRiskChecks(TradeIntent calldata intent)
-        internal
-        view
-        returns (bool, string memory)
+    /**
+     * @notice Validate signature — ECDSA first, then EIP-1271 for contract wallets.
+     */
+    function _isValidSignature(
+        address signer,
+        bytes32 hash,
+        bytes memory signature
+    ) internal view returns (bool) {
+        // 1. ECDSA (EOA wallets)
+        if (signature.length == 65) {
+            bytes32 r; bytes32 s; uint8 v;
+            assembly {
+                r := mload(add(signature, 32))
+                s := mload(add(signature, 64))
+                v := byte(0, mload(add(signature, 96)))
+            }
+            address recovered = ecrecover(hash, v, r, s);
+            if (recovered != address(0) && recovered == signer) return true;
+        }
+
+        // 2. EIP-1271 fallback (Safe, AA, Multisig)
+        if (signer.code.length > 0) {
+            try IERC1271(signer).isValidSignature(hash, signature)
+                returns (bytes4 result)
+            {
+                return result == ERC1271_MAGIC_VALUE;
+            } catch {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    function _getAgentOwner(uint256 agentId)
+        internal view returns (address agentOwner)
     {
-        // 1. Confidence threshold
-        if (intent.confidence < minConfidence) {
+        (,, agentOwner,,,,) = agentRegistry.getAgent(agentId);
+        require(agentOwner != address(0), "RiskRouter: agent not found");
+    }
+
+    function _runRiskChecks(TradeIntent calldata intent)
+        internal view returns (bool, string memory)
+    {
+        if (intent.confidence < minConfidence)
             return (false, "Confidence below minimum");
-        }
 
-        // 2. Single trade limit
-        if (intent.amountUsd > maxSingleTradeUsd) {
+        if (intent.amountUsd > maxSingleTradeUsd)
             return (false, "Exceeds single trade limit");
-        }
 
-        // 3. Token allowlist (extract base token from "ETH/USDC" → "ETH")
         string memory baseToken = _extractBaseToken(intent.tokenPair);
-        if (!allowedTokens[baseToken]) {
+        if (!allowedTokens[baseToken])
             return (false, "Token not in allowlist");
-        }
 
-        // 4. Daily loss limit
         DailyStats storage stats = agentDailyStats[intent.agentId];
         uint256 today = block.timestamp / 86400;
-        if (stats.date == today && stats.totalLossUsd >= maxDailyLossUsd) {
+        if (stats.date == today && stats.totalLossUsd >= maxDailyLossUsd)
             return (false, "Daily loss limit reached");
-        }
 
-        // 5. Agent must be active
         (,,,, bool active,,) = agentRegistry.getAgent(intent.agentId);
-        if (!active) {
+        if (!active)
             return (false, "Agent not active");
-        }
 
         return (true, "");
+    }
+
+    function _executeDEXSwap(
+        TradeIntent calldata intent,
+        bytes32 tradeHash,
+        address recipient
+    ) internal {
+        address[] memory path = new address[](2);
+        path[0] = intent.tokenIn;
+        path[1] = intent.tokenOut;
+
+        uint256[] memory amounts = dexRouter.swapExactTokensForTokens(
+            intent.amountIn,
+            intent.amountOutMin,
+            path,
+            recipient,
+            intent.deadline
+        );
+
+        emit TradeExecuted(intent.agentId, tradeHash, amounts);
     }
 
     function _updateDailyStats(TradeIntent calldata intent) internal {
         uint256 today = block.timestamp / 86400;
         DailyStats storage stats = agentDailyStats[intent.agentId];
         if (stats.date != today) {
-            stats.date = today;
+            stats.date         = today;
             stats.totalLossUsd = 0;
-            stats.tradeCount = 0;
+            stats.tradeCount   = 0;
         }
         stats.tradeCount++;
     }
 
     function _hashTrade(TradeIntent calldata intent)
-        internal
-        view
-        returns (bytes32)
+        internal view returns (bytes32)
     {
         bytes32 structHash = keccak256(
             abi.encode(
@@ -220,24 +290,18 @@ contract RiskRouter {
                 intent.confidence,
                 keccak256(bytes(intent.reason)),
                 intent.nonce,
-                intent.deadline
+                intent.deadline,
+                intent.tokenIn,
+                intent.tokenOut,
+                intent.amountIn,
+                intent.amountOutMin
             )
         );
         return keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
     }
 
-    function _recoverSigner(bytes32 hash, uint8 v, bytes32 r, bytes32 s)
-        internal
-        pure
-        returns (address)
-    {
-        return ecrecover(hash, v, r, s);
-    }
-
     function _extractBaseToken(string calldata pair)
-        internal
-        pure
-        returns (string memory)
+        internal pure returns (string memory)
     {
         bytes memory b = bytes(pair);
         uint256 slashIdx = 0;
@@ -265,6 +329,11 @@ contract RiskRouter {
 
     function setMinConfidence(uint256 threshold) external onlyOwner {
         minConfidence = threshold;
+    }
+
+    function setDEXRouter(address router) external onlyOwner {
+        dexRouter = IDEXRouter(router);
+        emit DEXRouterUpdated(router);
     }
 
     // ── View ──────────────────────────────────────────────────────────────────
