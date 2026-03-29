@@ -110,4 +110,4 @@ export function ConnectPrompt() {
       <p className="text-sm text-dim mono">Connect your wallet to get started</p>
     </div>
   );
-}
+}

@@ -4,9 +4,10 @@
   "deployer": "0x937dCeeAdBFD02D5453C7937E2217957D74E912d",
   "deployedAt": "2026-03-19T18:22:12.674Z",
   "contracts": {
-    "AgentRegistry": "00xd3f74bd23516E51DA95CE8D4068D56513614e231",
-    "ValidationRegistry": "0xe5134F06086657D38a989619Ce6424D1c01246c1",
-    "RiskRouter": "0x9695A9E2Bf0650979424108bD9351D8618633b13",
-    "ReputationManager": "0x9dcaDc468e41C5DfA6aFE3bfB57B704b3e4bbbe5"
+    "AgentRegistry": "0xf8E3e5F6B7A00BB3f7406041E1E420717e8D0724",
+    "ValidationRegistry": "0xA60C039F3e6de035Fb65689EB01695004Dc888E6",
+    "RiskRouter": "0x99d2b36b3806d921f8a05155586aBA1B217843Dc",
+    "ReputationManager": "0x3fdf09Dcff286a3b52019C56Aa47138FA56fC167"
   }
 }
+

@@ -12,9 +12,10 @@ import "./ValidationRegistry.sol";
  *           - Drawdown tracking (max drawdown for leaderboard)
  *           - Sharpe-proxy signals (win-rate + running PnL variance)
  *
- *         Caller access is open via onlyAuthorized so that RiskRouter and
- *         backend wallets can trigger updates automatically post-trade,
- *         removing the old onlyOwner bottleneck.
+ * FIX (multi-user): onlyAuthorized now also accepts the agent NFT owner from
+ * AgentRegistry, so any registered user can trigger reputation updates for
+ * their own agents. Previously only the contract owner and whitelisted callers
+ * could do this, blocking all other users.
  */
 contract ReputationManager {
 
@@ -38,13 +39,6 @@ contract ReputationManager {
         uint256 timestamp;
     }
 
-    /**
-     * @notice Per-agent performance metrics for leaderboard + Sharpe proxy.
-     *
-     *   Sharpe proxy  = avgPnlBps / stdDevProxy
-     *   stdDevProxy   = sqrt(sumSquaredPnlBps/n - avg²)  (computed off-chain)
-     *   maxDrawdownBps = peak-to-trough loss in absolute basis points
-     */
     struct AgentStats {
         int256  peakPnlBps;
         int256  currentPnlBps;
@@ -75,13 +69,20 @@ contract ReputationManager {
     }
 
     /**
-     * @notice Replaces the old onlyOwner on updateReputation.
-     *         Allows owner, RiskRouter, or any whitelisted backend wallet to
-     *         trigger updates automatically without manual intervention.
+     * FIX: Added _isAgentOwner(agentId) to the authorization check.
+     * This allows any user who owns an agent NFT to update their own agent's
+     * reputation, without needing to be whitelisted by the contract owner.
+     *
+     * Full authorization order:
+     *   1. msg.sender == ownerOf(agentId) in AgentRegistry  ← NEW
+     *   2. msg.sender == contract owner
+     *   3. msg.sender is in authorizedCallers (RiskRouter, backend wallet)
      */
-    modifier onlyAuthorized() {
+    modifier onlyAuthorized(uint256 agentId) {
         require(
-            msg.sender == owner || authorizedCallers[msg.sender],
+            _isAgentOwner(agentId)          ||
+            msg.sender == owner             ||
+            authorizedCallers[msg.sender],
             "ReputationManager: not authorized"
         );
         _;
@@ -98,19 +99,18 @@ contract ReputationManager {
 
     /**
      * @notice Update an agent's reputation after a trade settles.
-     *         Can be called by owner, RiskRouter, or any authorized caller.
      *
-     * @param agentId    On-chain agent ID (ERC-721 token ID).
-     * @param tradeId    Off-chain trade UUID (must exist in ValidationRegistry).
-     * @param profitable Whether the trade was profitable.
-     * @param pnlBps     PnL in basis points.
+     * FIX: modifier changed from onlyAuthorized (no args) to
+     * onlyAuthorized(agentId) so the agent owner check can use the agentId.
      */
     function updateReputation(
         uint256 agentId,
         string calldata tradeId,
         bool profitable,
         int256 pnlBps
-    ) external onlyAuthorized {
+    ) external onlyAuthorized(agentId) {
+        // getValidation returns: agentId, reason, confidence, riskCheck,
+        //                        timestamp, outcomeRecorded, profitable, pnlBps
         (,, uint256 confidence,,,,, ) =
             validationRegistry.getValidation(tradeId);
 
@@ -141,13 +141,15 @@ contract ReputationManager {
     /**
      * @notice Direct update without a ValidationRegistry lookup.
      *         Used by RiskRouter in automated post-trade flows.
+     *
+     * FIX: Same modifier fix — onlyAuthorized(agentId).
      */
     function updateReputationDirect(
         uint256 agentId,
         bool    profitable,
         int256  pnlBps,
         uint256 confidence
-    ) external onlyAuthorized {
+    ) external onlyAuthorized(agentId) {
         int256 delta = _computeDelta(profitable, pnlBps, confidence);
 
         agentRegistry.updateReputation(agentId, profitable, pnlBps);
@@ -182,7 +184,7 @@ contract ReputationManager {
             if      (confidence >= 75) delta = 5;
             else if (confidence >= 55) delta = 3;
             else                       delta = 1;
-            if (pnlBps > 200) delta += 1; // >2% bonus
+            if (pnlBps > 200) delta += 1;
         } else {
             if      (confidence >= 75) delta = -3;
             else if (confidence >= 55) delta = -2;
@@ -194,20 +196,6 @@ contract ReputationManager {
 
     // ── Drawdown + Sharpe proxy tracking ──────────────────────────────────────
 
-    /**
-     * @notice Update per-agent drawdown and running Sharpe-proxy stats.
-     *
-     * Drawdown:
-     *   currentPnl   += pnlBps
-     *   peakPnl       = max(peakPnl, currentPnl)
-     *   drawdown      = peakPnl - currentPnl
-     *   maxDrawdown   = max(maxDrawdown, drawdown)
-     *
-     * Sharpe proxy inputs (use off-chain to compute final ratio):
-     *   avg   = sumPnlBps / tradeCount
-     *   stdDev = sqrt(sumSquaredPnlBps/n - avg²)
-     *   Sharpe ≈ avg / stdDev
-     */
     function _updateAgentStats(
         uint256 agentId,
         bool    profitable,
@@ -252,16 +240,6 @@ contract ReputationManager {
         return agentRegistry.getTrustScore(agentId);
     }
 
-    /**
-     * @notice Get all performance stats for leaderboard display.
-     * @return peakPnlBps       Highest cumulative PnL ever reached.
-     * @return currentPnlBps    Current cumulative PnL.
-     * @return maxDrawdownBps   Maximum peak-to-trough drawdown (abs bps).
-     * @return avgPnlBps        Average per-trade PnL in basis points.
-     * @return winRate          Win rate × 10000 (e.g. 6750 = 67.50%).
-     * @return tradeCount       Total number of settled trades.
-     * @return sumSquaredPnlBps Sum of squared per-trade PnLs (for off-chain stdDev).
-     */
     function getAgentPerformance(uint256 agentId)
         external view
         returns (
@@ -287,12 +265,27 @@ contract ReputationManager {
     // ── Admin ─────────────────────────────────────────────────────────────────
 
     /**
-     * @notice Grant or revoke authorization.
-     *         After deployment wire in RiskRouter:
-     *           reputationManager.setAuthorizedCaller(riskRouterAddress, true)
+     * @notice Grant or revoke authorization for a backend/service wallet.
+     * Wire in RiskRouter after deployment:
+     *   reputationManager.setAuthorizedCaller(riskRouterAddress, true)
      */
     function setAuthorizedCaller(address caller, bool authorized) external onlyOwner {
         authorizedCallers[caller] = authorized;
         emit AuthorizedCallerSet(caller, authorized);
+    }
+
+    // ── Internal helpers ──────────────────────────────────────────────────────
+
+    /**
+     * @dev Returns true if msg.sender owns the agentId NFT in AgentRegistry.
+     *      Uses try/catch so a non-existent agentId returns false rather than
+     *      reverting — allowing the modifier to fall through to other branches.
+     */
+    function _isAgentOwner(uint256 agentId) internal view returns (bool) {
+        try agentRegistry.ownerOf(agentId) returns (address agentOwner) {
+            return agentOwner == msg.sender;
+        } catch {
+            return false;
+        }
     }
 }

@@ -2,8 +2,8 @@
   "_format": "hh-sol-cache-2",
   "files": {
     "C:\\Users\\ACER\\Trade\\blockchain\\contracts\\AgentRegistry.sol": {
-      "lastModificationDate": 1774718028665,
-      "contentHash": "74b65e5c7570c81120e818b879a77f42",
+      "lastModificationDate": 1774789838801,
+      "contentHash": "b40b3ca460ee7edae95cd8047b7abf80",
       "sourceName": "contracts/AgentRegistry.sol",
       "solcConfig": {
         "version": "0.8.24",
@@ -40,125 +40,8 @@
         "AgentRegistry"
       ]
     },
-    "C:\\Users\\ACER\\Trade\\blockchain\\contracts\\RiskRouter.sol": {
-      "lastModificationDate": 1774713248386,
-      "contentHash": "19e010e60d41a53fb3d2c7dbdc1c4234",
-      "sourceName": "contracts/RiskRouter.sol",
-      "solcConfig": {
-        "version": "0.8.24",
-        "settings": {
-          "optimizer": {
-            "enabled": true,
-            "runs": 200
-          },
-          "viaIR": true,
-          "evmVersion": "paris",
-          "outputSelection": {
-            "*": {
-              "*": [
-                "abi",
-                "evm.bytecode",
-                "evm.deployedBytecode",
-                "evm.methodIdentifiers",
-                "metadata"
-              ],
-              "": [
-                "ast"
-              ]
-            }
-          }
-        }
-      },
-      "imports": [
-        "./AgentRegistry.sol",
-        "./Interfaces.sol"
-      ],
-      "versionPragmas": [
-        "^0.8.24"
-      ],
-      "artifacts": [
-        "RiskRouter"
-      ]
-    },
-    "C:\\Users\\ACER\\Trade\\blockchain\\contracts\\ReputationManager.sol": {
-      "lastModificationDate": 1774713252619,
-      "contentHash": "7cc48a0ef9e1ea98542d7b3fcf31d8f6",
-      "sourceName": "contracts/ReputationManager.sol",
-      "solcConfig": {
-        "version": "0.8.24",
-        "settings": {
-          "optimizer": {
-            "enabled": true,
-            "runs": 200
-          },
-          "viaIR": true,
-          "evmVersion": "paris",
-          "outputSelection": {
-            "*": {
-              "*": [
-                "abi",
-                "evm.bytecode",
-                "evm.deployedBytecode",
-                "evm.methodIdentifiers",
-                "metadata"
-              ],
-              "": [
-                "ast"
-              ]
-            }
-          }
-        }
-      },
-      "imports": [
-        "./AgentRegistry.sol",
-        "./ValidationRegistry.sol"
-      ],
-      "versionPragmas": [
-        "^0.8.24"
-      ],
-      "artifacts": [
-        "ReputationManager"
-      ]
-    },
-    "C:\\Users\\ACER\\Trade\\blockchain\\contracts\\ValidationRegistry.sol": {
-      "lastModificationDate": 1774713249966,
-      "contentHash": "c9032591bdc4fb2fd77291e5f683678f",
-      "sourceName": "contracts/ValidationRegistry.sol",
-      "solcConfig": {
-        "version": "0.8.24",
-        "settings": {
-          "optimizer": {
-            "enabled": true,
-            "runs": 200
-          },
-          "viaIR": true,
-          "evmVersion": "paris",
-          "outputSelection": {
-            "*": {
-              "*": [
-                "abi",
-                "evm.bytecode",
-                "evm.deployedBytecode",
-                "evm.methodIdentifiers",
-                "metadata"
-              ],
-              "": [
-                "ast"
-              ]
-            }
-          }
-        }
-      },
-      "imports": [],
-      "versionPragmas": [
-        "^0.8.24"
-      ],
-      "artifacts": [
-        "ValidationRegistry"
-      ]
-    },
     "C:\\Users\\ACER\\Trade\\blockchain\\contracts\\Interfaces.sol": {
-      "lastModificationDate": 1774713237899,
+      "lastModificationDate": 1774789843084,
       "contentHash": "16420381258992e6933e2147576d872f",
       "sourceName": "contracts/Interfaces.sol",
       "solcConfig": {
@@ -197,6 +80,124 @@
         "IERC721",
         "IERC721Metadata",
         "IERC721Receiver"
+      ]
+    },
+    "C:\\Users\\ACER\\Trade\\blockchain\\contracts\\RiskRouter.sol": {
+      "lastModificationDate": 1774789839070,
+      "contentHash": "98e324b755e72c7430df8a497ac44a71",
+      "sourceName": "contracts/RiskRouter.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "viaIR": true,
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "./AgentRegistry.sol",
+        "./Interfaces.sol"
+      ],
+      "versionPragmas": [
+        "^0.8.24"
+      ],
+      "artifacts": [
+        "RiskRouter"
+      ]
+    },
+    "C:\\Users\\ACER\\Trade\\blockchain\\contracts\\ReputationManager.sol": {
+      "lastModificationDate": 1774789841997,
+      "contentHash": "c31d49c8a388beaeb342c8bd4aeb34d5",
+      "sourceName": "contracts/ReputationManager.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "viaIR": true,
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "./AgentRegistry.sol",
+        "./ValidationRegistry.sol"
+      ],
+      "versionPragmas": [
+        "^0.8.24"
+      ],
+      "artifacts": [
+        "ReputationManager"
+      ]
+    },
+    "C:\\Users\\ACER\\Trade\\blockchain\\contracts\\ValidationRegistry.sol": {
+      "lastModificationDate": 1774789838673,
+      "contentHash": "b393eff0a9398416269cb3b5e96d121f",
+      "sourceName": "contracts/ValidationRegistry.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "viaIR": true,
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [],
+      "versionPragmas": [
+        "^0.8.24"
+      ],
+      "artifacts": [
+        "IAgentRegistry",
+        "ValidationRegistry"
       ]
     }
   }

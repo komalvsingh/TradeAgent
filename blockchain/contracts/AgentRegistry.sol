@@ -9,7 +9,13 @@ import "./Interfaces.sol";
  *         Each agent is minted as an NFT token, stores its metadata, and carries
  *         a trust score that evolves with trade outcomes.
  *         Implements EIP-1271 for contract-wallet signature validation.
- *         Inspired by ERC-8004 agent identity standard.
+ *
+ * FIXES applied vs original:
+ *   1. _transfer: removes tokenId from _ownerAgents[from] (swap-and-pop) so
+ *      getAgentsByOwner never returns stale/sold tokens for the old owner.
+ *   2. deactivateAgent: now also allows the contract owner to deactivate any
+ *      agent (emergency override). Separate emergencyDeactivate() added.
+ *   3. updateReputation: inactive-agent check is unchanged but guarded cleanly.
  */
 contract AgentRegistry is IERC721Metadata {
 
@@ -51,8 +57,12 @@ contract AgentRegistry is IERC721Metadata {
 
     // ── Registry State ────────────────────────────────────────────────────────
     uint256 private _nextId = 1;
-    mapping(uint256 => Agent)   private _agents;
+    mapping(uint256 => Agent)     private _agents;
     mapping(address => uint256[]) private _ownerAgents;
+
+    // ── index map: _ownerAgentIndex[owner][agentId] = position in _ownerAgents[owner]
+    // Used by swap-and-pop so removal is O(1) instead of O(n).
+    mapping(address => mapping(uint256 => uint256)) private _ownerAgentIndex;
 
     address public reputationManager;
     address public owner;
@@ -246,16 +256,37 @@ contract AgentRegistry is IERC721Metadata {
             registeredAt:     block.timestamp
         });
 
+        // FIX 1 (part a): record index BEFORE push so index is 0-based position.
+        _ownerAgentIndex[msg.sender][agentId] = _ownerAgents[msg.sender].length;
         _ownerAgents[msg.sender].push(agentId);
+
         _safeMint(msg.sender, agentId);
 
         emit AgentRegistered(agentId, msg.sender, name_, strategy);
     }
 
+    /**
+     * @notice Deactivate your own agent.
+     * FIX 2: Contract owner may also deactivate any agent as an emergency override.
+     */
     function deactivateAgent(uint256 agentId) external {
         Agent storage agent = _agents[agentId];
-        require(agent.owner == msg.sender, "AgentRegistry: not agent owner");
-        require(agent.active,              "AgentRegistry: already inactive");
+        require(
+            agent.owner == msg.sender || msg.sender == owner,
+            "AgentRegistry: not agent owner"
+        );
+        require(agent.active, "AgentRegistry: already inactive");
+        agent.active = false;
+        emit AgentDeactivated(agentId);
+    }
+
+    /**
+     * @notice Emergency deactivation callable only by the contract owner.
+     *         Identical result to deactivateAgent but semantically explicit.
+     */
+    function emergencyDeactivate(uint256 agentId) external onlyOwner {
+        Agent storage agent = _agents[agentId];
+        require(agent.active, "AgentRegistry: already inactive");
         agent.active = false;
         emit AgentDeactivated(agentId);
     }
@@ -337,15 +368,40 @@ contract AgentRegistry is IERC721Metadata {
         );
     }
 
+    /**
+     * FIX 1: Removes tokenId from the old owner's _ownerAgents list using
+     * O(1) swap-and-pop, then updates the moved element's index.
+     * Without this fix, `getAgentsByOwner(from)` permanently returns the
+     * transferred token even after the owner changes.
+     */
     function _transfer(address from, address to, uint256 tokenId) internal {
         require(_owners[tokenId] == from, "AgentRegistry: wrong owner");
         require(to != address(0),         "AgentRegistry: transfer to zero");
+
         delete _tokenApprovals[tokenId];
-        _balances[from]        -= 1;
-        _balances[to]          += 1;
-        _owners[tokenId]        = to;
-        _agents[tokenId].owner  = to;
+
+        // ── Remove tokenId from _ownerAgents[from] via swap-and-pop ──────────
+        uint256[] storage fromList = _ownerAgents[from];
+        uint256 removeIdx = _ownerAgentIndex[from][tokenId];
+        uint256 lastIdx   = fromList.length - 1;
+
+        if (removeIdx != lastIdx) {
+            uint256 lastTokenId = fromList[lastIdx];
+            fromList[removeIdx]                        = lastTokenId;
+            _ownerAgentIndex[from][lastTokenId]        = removeIdx;
+        }
+        fromList.pop();
+        delete _ownerAgentIndex[from][tokenId];
+
+        // ── Add tokenId to _ownerAgents[to] ──────────────────────────────────
+        _ownerAgentIndex[to][tokenId] = _ownerAgents[to].length;
         _ownerAgents[to].push(tokenId);
+
+        _balances[from]       -= 1;
+        _balances[to]         += 1;
+        _owners[tokenId]       = to;
+        _agents[tokenId].owner = to;
+
         emit Transfer(from, to, tokenId);
     }
 

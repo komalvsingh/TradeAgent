@@ -16,6 +16,23 @@ import "./Interfaces.sol";
  *         4. Verifies the token is in the allowed list
  *         5. Emits TradeApproved / TradeRejected for indexers
  *         6. Optionally calls the DEX router for on-chain execution
+ *
+ * FIX applied vs original:
+ *   _updateDailyStats never incremented totalLossUsd, so the daily loss limit
+ *   check (stats.totalLossUsd >= maxDailyLossUsd) could never trigger — the
+ *   guard was completely dead.
+ *
+ *   Solution: submitTrade now passes the trade's amountUsd into _updateDailyStats.
+ *   On a SELL (or any trade flagged as a loss) the full amountUsd is added to
+ *   totalLossUsd. For BUY trades the exposure is also tracked because the capital
+ *   is at risk. The owner can adjust the accounting model via setLossAccounting().
+ *
+ *   Two modes controlled by lossAccountingMode:
+ *     0 = CONSERVATIVE — every approved trade counts its full amountUsd as
+ *         potential loss (safest, recommended for early deployment).
+ *     1 = SELL_ONLY    — only SELL-action trades accumulate toward the daily
+ *         loss counter (use once you have a ReputationManager feeding back
+ *         real pnl outcomes).
  */
 contract RiskRouter {
 
@@ -41,6 +58,7 @@ contract RiskRouter {
     event TokenAllowlistUpdated(string token, bool allowed);
     event LimitsUpdated(uint256 maxSingleTradeUsd, uint256 maxDailyLossUsd);
     event DEXRouterUpdated(address dexRouter);
+    event LossAccountingModeUpdated(uint8 mode);
 
     // ── Structs ───────────────────────────────────────────────────────────────
     struct TradeIntent {
@@ -74,7 +92,11 @@ contract RiskRouter {
     uint256 public maxDailyLossUsd   = 10_000 * 100;  // $10,000 in cents
     uint256 public minConfidence      = 45;
 
+    // FIX: 0 = CONSERVATIVE (all trades), 1 = SELL_ONLY
+    uint8 public lossAccountingMode = 0;
+
     bytes4 internal constant ERC1271_MAGIC_VALUE = 0x1626ba7e;
+    bytes32 private constant SELL_HASH = keccak256(bytes("SELL"));
 
     mapping(string  => bool)       public allowedTokens;
     mapping(uint256 => DailyStats) public agentDailyStats;
@@ -152,7 +174,9 @@ contract RiskRouter {
         agentNonces[intent.agentId]++;
 
         if (passed) {
-            _updateDailyStats(intent);
+            // FIX: pass amountUsd into _updateDailyStats so totalLossUsd accumulates.
+            _updateDailyStats(intent.agentId, intent.amountUsd, intent.action);
+
             emit TradeApproved(
                 intent.agentId,
                 agentOwner,
@@ -181,9 +205,6 @@ contract RiskRouter {
 
     // ── Internal helpers ──────────────────────────────────────────────────────
 
-    /**
-     * @notice Validate signature — ECDSA first, then EIP-1271 for contract wallets.
-     */
     function _isValidSignature(
         address signer,
         bytes32 hash,
@@ -266,15 +287,39 @@ contract RiskRouter {
         emit TradeExecuted(intent.agentId, tradeHash, amounts);
     }
 
-    function _updateDailyStats(TradeIntent calldata intent) internal {
+    /**
+     * FIX: Now actually increments totalLossUsd.
+     *
+     * Mode 0 (CONSERVATIVE): every approved trade's full amountUsd is counted
+     *   toward the daily loss ceiling — safe default for testnet / early prod.
+     * Mode 1 (SELL_ONLY): only SELL trades count, so BUY trades never eat into
+     *   the daily loss budget — use when you trust your downstream pnl reporting.
+     *
+     * @param agentId   The agent submitting the trade.
+     * @param amountUsd Trade size in USD cents.
+     * @param action    "BUY" or "SELL" string from the intent.
+     */
+    function _updateDailyStats(
+        uint256 agentId,
+        uint256 amountUsd,
+        string calldata action
+    ) internal {
         uint256 today = block.timestamp / 86400;
-        DailyStats storage stats = agentDailyStats[intent.agentId];
+        DailyStats storage stats = agentDailyStats[agentId];
+
         if (stats.date != today) {
             stats.date         = today;
             stats.totalLossUsd = 0;
             stats.tradeCount   = 0;
         }
+
         stats.tradeCount++;
+
+        // FIX: accumulate loss exposure so the daily cap actually fires.
+        bool isSell = keccak256(bytes(action)) == SELL_HASH;
+        if (lossAccountingMode == 0 || isSell) {
+            stats.totalLossUsd += amountUsd;
+        }
     }
 
     function _hashTrade(TradeIntent calldata intent)
@@ -336,6 +381,16 @@ contract RiskRouter {
         emit DEXRouterUpdated(router);
     }
 
+    /**
+     * @notice Set loss accounting mode.
+     * @param mode 0 = CONSERVATIVE (all trades), 1 = SELL_ONLY.
+     */
+    function setLossAccountingMode(uint8 mode) external onlyOwner {
+        require(mode <= 1, "RiskRouter: invalid mode");
+        lossAccountingMode = mode;
+        emit LossAccountingModeUpdated(mode);
+    }
+
     // ── View ──────────────────────────────────────────────────────────────────
 
     function getAgentNonce(uint256 agentId) external view returns (uint256) {
@@ -344,5 +399,13 @@ contract RiskRouter {
 
     function isTradeProcessed(bytes32 tradeHash) external view returns (bool) {
         return processedTrades[tradeHash];
+    }
+
+    function getAgentDailyStats(uint256 agentId)
+        external view
+        returns (uint256 date, uint256 totalLossUsd, uint256 tradeCount)
+    {
+        DailyStats storage s = agentDailyStats[agentId];
+        return (s.date, s.totalLossUsd, s.tradeCount);
     }
 }

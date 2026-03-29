@@ -16,12 +16,23 @@ const ADDRESSES = {
   ReputationManager:  import.meta.env.VITE_REPUTATION_MANAGER_ADDRESS    || "",
 };
 
+// ── Ethers version guard ─────────────────────────────────────────────────────
+const ZERO_ADDR =
+  ethers.ZeroAddress ??
+  ethers.constants?.AddressZero;
+
+const toNumber = (val) => {
+  if (val === undefined || val === null) return 0;
+  if (typeof val === "bigint") return Number(val);
+  if (typeof val?.toNumber === "function") return val.toNumber();
+  return Number(val);
+};
+
 const ContractContext = createContext(null);
 
 export function ContractProvider({ children }) {
   const { signer, provider } = useWallet();
 
-  // Build contract instances whenever signer changes
   const contracts = useMemo(() => {
     const runner = signer || provider;
     if (!runner) return {};
@@ -44,37 +55,67 @@ export function ContractProvider({ children }) {
     };
   }, [signer, provider]);
 
-  // ════════════════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════
   // AgentRegistry helpers
-  // ════════════════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════
 
-  /**
-   * Register a new AI trading agent.
-   * Contract now requires a tokenURI (4th arg) for ERC-721 metadata.
-   */
   const registerAgentOnChain = async (name, strategy, endpoint, tokenURI = "") => {
-    if (!contracts.agentRegistry) throw new Error("AgentRegistry not connected");
-    const tx = await contracts.agentRegistry.registerAgent(name, strategy, endpoint, tokenURI);
+    if (!contracts.agentRegistry) {
+      throw new Error(
+        "AgentRegistry contract not connected. " +
+        "Check your VITE_AGENT_REGISTRY_ADDRESS env var and that you are on Sepolia."
+      );
+    }
+    if (!signer) throw new Error("Wallet not connected");
+
+    const tx      = await contracts.agentRegistry.registerAgent(name, strategy, endpoint, tokenURI);
     const receipt = await tx.wait();
-    // Parse agentId from AgentRegistered event
-    const iface = contracts.agentRegistry.interface;
-    const event = receipt.logs
-      .map(log => { try { return iface.parseLog(log); } catch { return null; } })
-      .find(e => e?.name === "AgentRegistered");
-    return {
-      receipt,
-      agentId: event ? Number(event.args.agentId) : null,
-    };
+
+    let agentId = null;
+    try {
+      const iface = contracts.agentRegistry.interface;
+
+      if (receipt.events?.length) {
+        const ev = receipt.events.find((e) => e.event === "AgentRegistered");
+        if (ev?.args?.agentId !== undefined) {
+          agentId = toNumber(ev.args.agentId);
+        }
+      }
+
+      if (agentId === null && receipt.logs?.length) {
+        for (const log of receipt.logs) {
+          try {
+            const parsed = iface.parseLog({ topics: log.topics, data: log.data });
+            if (parsed?.name === "AgentRegistered") {
+              agentId = toNumber(parsed.args.agentId);
+              break;
+            }
+          } catch { /* skip */ }
+        }
+      }
+    } catch (parseErr) {
+      console.warn("Could not parse AgentRegistered event:", parseErr.message);
+    }
+
+    return { receipt, agentId };
   };
 
-  /** Deactivate an agent (must be called by agent owner). */
+  // FIX (AgentRegistry): contract owner can now also deactivate any agent
+  // (emergencyDeactivate). This helper calls the standard deactivateAgent —
+  // the contract will accept both agent-owner and contract-owner callers.
   const deactivateAgent = async (agentId) => {
     if (!contracts.agentRegistry) throw new Error("AgentRegistry not connected");
     const tx = await contracts.agentRegistry.deactivateAgent(agentId);
     return tx.wait();
   };
 
-  /** Get full agent info. */
+  // Explicit emergency path — only works if the caller is the contract owner.
+  const emergencyDeactivateAgent = async (agentId) => {
+    if (!contracts.agentRegistry) throw new Error("AgentRegistry not connected");
+    const tx = await contracts.agentRegistry.emergencyDeactivate(agentId);
+    return tx.wait();
+  };
+
   const getAgentInfo = async (agentId) => {
     if (!contracts.agentRegistry) return null;
     const result = await contracts.agentRegistry.getAgent(agentId);
@@ -82,99 +123,76 @@ export function ContractProvider({ children }) {
       name:             result[0],
       strategy:         result[1],
       owner:            result[2],
-      trustScore:       Number(result[3]),
+      trustScore:       toNumber(result[3]),
       active:           result[4],
-      totalTrades:      Number(result[5]),
-      profitableTrades: Number(result[6]),
+      totalTrades:      toNumber(result[5]),
+      profitableTrades: toNumber(result[6]),
     };
   };
 
-  /** Get agent trust score (0–100). */
   const getTrustScore = async (agentId) => {
     if (!contracts.agentRegistry) return null;
     const score = await contracts.agentRegistry.getTrustScore(agentId);
-    return Number(score);
+    return toNumber(score);
   };
 
-  /** Get all agent IDs owned by an address. */
   const getAgentsByOwner = async (ownerAddress) => {
     if (!contracts.agentRegistry) return [];
     const ids = await contracts.agentRegistry.getAgentsByOwner(ownerAddress);
-    return ids.map(Number);
+    return ids.map(toNumber);
   };
 
-  /** Total number of agents registered. */
   const getTotalAgents = async () => {
     if (!contracts.agentRegistry) return 0;
     const total = await contracts.agentRegistry.totalAgents();
-    return Number(total);
+    return toNumber(total);
   };
 
-  /** ERC-721: get tokenURI for a given agentId. */
   const getTokenURI = async (agentId) => {
     if (!contracts.agentRegistry) return null;
     return contracts.agentRegistry.tokenURI(agentId);
   };
 
-  /**
-   * EIP-1271: validate a signature against a specific agent's owner.
-   * Handles both EOA (ECDSA) and contract wallets (Safe, AA) automatically.
-   * @param {number|string} agentId
-   * @param {string} hash   - bytes32 hex string (EIP-712 digest)
-   * @param {string} sig    - hex signature bytes
-   */
   const isValidAgentSignature = async (agentId, hash, sig) => {
     if (!contracts.agentRegistry) return false;
     return contracts.agentRegistry.isValidAgentSignature(agentId, hash, sig);
   };
 
-  // ════════════════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════
   // RiskRouter helpers
-  // ════════════════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════
 
-  /** Get current nonce for an agent (used when building TradeIntent). */
   const getAgentNonce = async (agentId) => {
     if (!contracts.riskRouter) return null;
     const nonce = await contracts.riskRouter.getAgentNonce(agentId);
-    return Number(nonce);
+    return toNumber(nonce);
   };
 
-  /** Check if a trade hash has already been processed (replay protection). */
   const isTradeProcessed = async (tradeHash) => {
     if (!contracts.riskRouter) return false;
     return contracts.riskRouter.isTradeProcessed(tradeHash);
   };
 
-  /**
-   * Build and sign a TradeIntent, then submit it to the RiskRouter.
-   *
-   * New contract signature:
-   *   submitTrade(TradeIntent calldata intent, bytes calldata signature)
-   *
-   * TradeIntent now includes DEX execution fields:
-   *   tokenIn, tokenOut, amountIn, amountOutMin (pass zero/address(0) for off-chain execution)
-   *
-   * @param {object} intent - TradeIntent fields
-   * @param {string} intent.agentId
-   * @param {string} intent.tokenPair      - e.g. "ETH/USDC"
-   * @param {string} intent.action         - "BUY" | "SELL"
-   * @param {string|number} intent.amountUsd  - in USD cents
-   * @param {number} intent.confidence     - 0-100
-   * @param {string} intent.reason
-   * @param {string} [intent.tokenIn]      - ERC-20 address or address(0)
-   * @param {string} [intent.tokenOut]     - ERC-20 address or address(0)
-   * @param {string|number} [intent.amountIn]     - token amount (0 = off-chain)
-   * @param {string|number} [intent.amountOutMin] - slippage min (0 = off-chain)
-   */
+  // FIX (RiskRouter): Added getAgentDailyStats — now exposed since the contract
+  // has the view function and totalLossUsd is actually populated.
+  const getAgentDailyStats = async (agentId) => {
+    if (!contracts.riskRouter) return null;
+    const result = await contracts.riskRouter.getAgentDailyStats(agentId);
+    return {
+      date:          toNumber(result[0]),
+      totalLossUsd:  toNumber(result[1]),
+      tradeCount:    toNumber(result[2]),
+    };
+  };
+
   const submitTradeIntent = async (intent) => {
     if (!contracts.riskRouter) throw new Error("RiskRouter not connected");
     if (!signer) throw new Error("Wallet not connected");
 
-    const chainId = (await signer.provider.getNetwork()).chainId;
-    const nonce   = await getAgentNonce(intent.agentId);
-    const deadline = Math.floor(Date.now() / 1000) + 300; // 5 min
-
-    const ZERO_ADDR = ethers.constants.AddressZero;
+    const network  = await signer.provider.getNetwork();
+    const chainId  = toNumber(network.chainId);
+    const nonce    = await getAgentNonce(intent.agentId);
+    const deadline = Math.floor(Date.now() / 1000) + 300;
 
     const tradeIntent = {
       agentId:      intent.agentId,
@@ -191,7 +209,6 @@ export function ContractProvider({ children }) {
       amountOutMin: intent.amountOutMin || 0,
     };
 
-    // EIP-712 domain — must match RiskRouter constructor
     const domain = {
       name:              "AITradingAgent",
       version:           "1",
@@ -216,20 +233,26 @@ export function ContractProvider({ children }) {
       ],
     };
 
-    // Sign via EIP-712 (_signTypedData handles both EOA and injected wallets)
-    const signature = await signer._signTypedData(domain, types, tradeIntent);
+    const signature = await (
+      typeof signer.signTypedData === "function"
+        ? signer.signTypedData(domain, types, tradeIntent)   // ethers v6
+        : signer._signTypedData(domain, types, tradeIntent)  // ethers v5
+    );
 
-    const tx = await contracts.riskRouter.submitTrade(tradeIntent, signature);
+    const tx      = await contracts.riskRouter.submitTrade(tradeIntent, signature);
     const receipt = await tx.wait();
 
-    // Parse result from events
-    const iface = contracts.riskRouter.interface;
-    const approvedEvent = receipt.logs
-      .map(log => { try { return iface.parseLog(log); } catch { return null; } })
-      .find(e => e?.name === "TradeApproved");
-    const rejectedEvent = receipt.logs
-      .map(log => { try { return iface.parseLog(log); } catch { return null; } })
-      .find(e => e?.name === "TradeRejected");
+    const iface       = contracts.riskRouter.interface;
+    let approvedEvent = null;
+    let rejectedEvent = null;
+
+    for (const log of receipt.logs || []) {
+      try {
+        const parsed = iface.parseLog({ topics: log.topics, data: log.data });
+        if (parsed?.name === "TradeApproved") approvedEvent = parsed;
+        if (parsed?.name === "TradeRejected") rejectedEvent = parsed;
+      } catch { /* skip foreign logs */ }
+    }
 
     return {
       receipt,
@@ -240,78 +263,82 @@ export function ContractProvider({ children }) {
     };
   };
 
-  // ════════════════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════
   // ValidationRegistry helpers
-  // ════════════════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════
 
   /**
-   * Store a validation with an EIP-712 signed artifact.
+   * FIX (ValidationRegistry — timestamp bug):
    *
-   * New contract requirement: caller must sign the ValidationArtifact struct
-   * and pass the signature. This is verified on-chain.
+   * The fixed contract accepts a caller-supplied `timestamp` (7th arg before
+   * validatorSig) and verifies the sig against a hash built from that timestamp.
+   * This means signing and verification now use the same inputs and ecrecover
+   * always recovers the correct address.
    *
-   * @param {number}  agentId
-   * @param {string}  tradeId      - off-chain UUID
-   * @param {string}  reason
-   * @param {number}  confidence   - 0-100
-   * @param {string}  riskCheck    - "passed" | "failed"
+   * Signing uses personal_sign / signMessage (prefix-aware) because the contract's
+   * _verifySignatureWithPrefix prepends "\x19Ethereum Signed Message:\n32".
+   *
+   * Flow:
+   *   1. Get current timestamp from latest block (same reference the contract
+   *      allows within ±10 min tolerance).
+   *   2. Call computeArtifactHash() view to get the exact bytes32 to sign.
+   *   3. Sign with signer.signMessage(bytes) — this uses personal_sign which
+   *      adds the prefix the contract expects. No eth_sign needed.
+   *   4. Submit storeValidation(..., timestamp, sig) — 7 args.
    */
   const storeValidation = async (agentId, tradeId, reason, confidence, riskCheck) => {
     if (!contracts.validationRegistry) throw new Error("ValidationRegistry not connected");
     if (!signer) throw new Error("Wallet not connected");
 
-    const chainId   = (await signer.provider.getNetwork()).chainId;
-    const timestamp = Math.floor(Date.now() / 1000);
     const validator = await signer.getAddress();
 
-    // EIP-712 domain — must match ValidationRegistry constructor
-    const domain = {
-      name:              "AITradingValidation",
-      version:           "1",
-      chainId,
-      verifyingContract: ADDRESSES.ValidationRegistry,
-    };
+    // Step 1: Get timestamp from the chain (within the contract's ±10 min window).
+    const latestBlock = await signer.provider.getBlock("latest");
+    const timestamp   = latestBlock.timestamp;
 
-    const types = {
-      ValidationArtifact: [
-        { name: "agentId",    type: "uint256" },
-        { name: "tradeId",    type: "string"  },
-        { name: "confidence", type: "uint256" },
-        { name: "riskCheck",  type: "string"  },
-        { name: "timestamp",  type: "uint256" },
-        { name: "validator",  type: "address" },
-      ],
-    };
+    // Step 2: Compute the exact artifact hash the contract will verify against.
+    // We use the provider (read-only) — no MetaMask popup here.
+    const artifactHash = await contracts.validationRegistry.computeArtifactHash(
+      agentId,
+      tradeId,
+      confidence,
+      riskCheck,
+      timestamp,
+      validator
+    );
 
-    const value = { agentId, tradeId, confidence, riskCheck, timestamp, validator };
-    const validatorSig = await signer._signTypedData(domain, types, value);
+    // Step 3: Sign with personal_sign (signMessage).
+    // The contract uses _verifySignatureWithPrefix which prepends
+    // "\x19Ethereum Signed Message:\n32", matching personal_sign exactly.
+    // ethers v6: getBytes(); ethers v5: arrayify()
+    const hashBytes = ethers.getBytes
+      ? ethers.getBytes(artifactHash)          // ethers v6
+      : ethers.utils.arrayify(artifactHash);   // ethers v5
 
+    const validatorSig = await signer.signMessage(hashBytes);
+
+    // Step 4: Submit — 7 args (fixed contract adds `timestamp` before validatorSig).
     const tx = await contracts.validationRegistry.storeValidation(
-      agentId, tradeId, reason, confidence, riskCheck, validatorSig
+      agentId, tradeId, reason, confidence, riskCheck, timestamp, validatorSig
     );
     return tx.wait();
   };
 
-  /** Get stored validation data. */
   const getValidation = async (tradeId) => {
     if (!contracts.validationRegistry) return null;
     const result = await contracts.validationRegistry.getValidation(tradeId);
     return {
-      agentId:         Number(result[0]),
+      agentId:         toNumber(result[0]),
       reason:          result[1],
-      confidence:      Number(result[2]),
+      confidence:      toNumber(result[2]),
       riskCheck:       result[3],
-      timestamp:       Number(result[4]),
+      timestamp:       toNumber(result[4]),
       outcomeRecorded: result[5],
       profitable:      result[6],
-      pnlBps:          Number(result[7]),
+      pnlBps:          toNumber(result[7]),
     };
   };
 
-  /**
-   * Get the raw EIP-712 artifact stored for a validation.
-   * Returns validator address, raw signature bytes, and artifact hash.
-   */
   const getValidationArtifact = async (tradeId) => {
     if (!contracts.validationRegistry) return null;
     const result = await contracts.validationRegistry.getValidationArtifact(tradeId);
@@ -322,104 +349,69 @@ export function ContractProvider({ children }) {
     };
   };
 
-  /**
-   * Re-verify a stored artifact entirely on-chain.
-   * Returns true if the validator signature is still valid.
-   */
   const verifyValidationArtifact = async (tradeId) => {
     if (!contracts.validationRegistry) return false;
     return contracts.validationRegistry.verifyValidationArtifact(tradeId);
   };
 
-  /** Get all trade IDs for an agent. */
   const getAgentTradeIds = async (agentId) => {
     if (!contracts.validationRegistry) return [];
     return contracts.validationRegistry.getAgentTradeIds(agentId);
   };
 
-  /** Get total trade count for an agent. */
   const getAgentTradeCount = async (agentId) => {
     if (!contracts.validationRegistry) return 0;
     const count = await contracts.validationRegistry.getAgentTradeCount(agentId);
-    return Number(count);
+    return toNumber(count);
   };
 
-  // ════════════════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════
   // ReputationManager helpers
-  // ════════════════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════
 
-  /**
-   * Update reputation via ValidationRegistry (requires prior storeValidation call).
-   * Now callable by RiskRouter or any authorized caller, not just owner.
-   */
   const updateReputation = async (agentId, tradeId, profitable, pnlBps) => {
     if (!contracts.reputationManager) throw new Error("ReputationManager not connected");
-    const tx = await contracts.reputationManager.updateReputation(
-      agentId, tradeId, profitable, pnlBps
-    );
+    const tx = await contracts.reputationManager.updateReputation(agentId, tradeId, profitable, pnlBps);
     return tx.wait();
   };
 
-  /**
-   * Direct reputation update — no ValidationRegistry entry required.
-   * Used for automated flows triggered by RiskRouter.
-   */
   const updateReputationDirect = async (agentId, profitable, pnlBps, confidence) => {
     if (!contracts.reputationManager) throw new Error("ReputationManager not connected");
-    const tx = await contracts.reputationManager.updateReputationDirect(
-      agentId, profitable, pnlBps, confidence
-    );
+    const tx = await contracts.reputationManager.updateReputationDirect(agentId, profitable, pnlBps, confidence);
     return tx.wait();
   };
 
-  /** Get current trust score via ReputationManager. */
   const getTrustScoreViaManager = async (agentId) => {
     if (!contracts.reputationManager) return null;
     const score = await contracts.reputationManager.getTrustScore(agentId);
-    return Number(score);
+    return toNumber(score);
   };
 
-  /** Get full trade history for an agent. */
   const getAgentHistory = async (agentId) => {
     if (!contracts.reputationManager) return [];
     const history = await contracts.reputationManager.getAgentHistory(agentId);
-    return history.map(h => ({
-      agentId:    Number(h.agentId),
+    return history.map((h) => ({
+      agentId:    toNumber(h.agentId),
       tradeId:    h.tradeId,
       profitable: h.profitable,
-      pnlBps:     Number(h.pnlBps),
-      confidence: Number(h.confidence),
-      timestamp:  Number(h.timestamp),
+      pnlBps:     toNumber(h.pnlBps),
+      confidence: toNumber(h.confidence),
+      timestamp:  toNumber(h.timestamp),
     }));
   };
 
-  /**
-   * Get all performance stats for leaderboard display.
-   * Includes drawdown, win rate, and Sharpe proxy inputs.
-   *
-   * @returns {object}
-   *   peakPnlBps       - highest cumulative PnL ever reached
-   *   currentPnlBps    - current cumulative PnL
-   *   maxDrawdownBps   - maximum peak-to-trough drawdown (abs bps)
-   *   avgPnlBps        - average per-trade PnL
-   *   winRate          - win rate × 10000 (e.g. 6750 = 67.50%)
-   *   tradeCount       - total settled trades
-   *   sumSquaredPnlBps - for off-chain Sharpe ratio stdDev calculation
-   *   sharpeProxy      - avgPnlBps / stdDev estimate (computed here client-side)
-   */
   const getAgentPerformance = async (agentId) => {
     if (!contracts.reputationManager) return null;
     const result = await contracts.reputationManager.getAgentPerformance(agentId);
 
-    const peakPnlBps       = Number(result[0]);
-    const currentPnlBps    = Number(result[1]);
-    const maxDrawdownBps   = Number(result[2]);
-    const avgPnlBps        = Number(result[3]);
-    const winRate          = Number(result[4]);      // e.g. 6750 = 67.50%
-    const tradeCount       = Number(result[5]);
-    const sumSquaredPnlBps = Number(result[6]);
+    const peakPnlBps       = toNumber(result[0]);
+    const currentPnlBps    = toNumber(result[1]);
+    const maxDrawdownBps   = toNumber(result[2]);
+    const avgPnlBps        = toNumber(result[3]);
+    const winRate          = toNumber(result[4]);
+    const tradeCount       = toNumber(result[5]);
+    const sumSquaredPnlBps = toNumber(result[6]);
 
-    // Client-side Sharpe proxy: avg / stdDev
     let sharpeProxy = null;
     if (tradeCount > 1 && sumSquaredPnlBps > 0) {
       const variance = sumSquaredPnlBps / tradeCount - Math.pow(avgPnlBps, 2);
@@ -432,16 +424,16 @@ export function ContractProvider({ children }) {
       currentPnlBps,
       maxDrawdownBps,
       avgPnlBps,
-      winRatePct:    winRate / 100,        // e.g. 67.50
+      winRatePct:    winRate / 100,
       tradeCount,
       sumSquaredPnlBps,
       sharpeProxy,
     };
   };
 
-  // ════════════════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════
   // Context value
-  // ════════════════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════
 
   return (
     <ContractContext.Provider value={{
@@ -451,6 +443,7 @@ export function ContractProvider({ children }) {
       // AgentRegistry
       registerAgentOnChain,
       deactivateAgent,
+      emergencyDeactivateAgent,   // NEW — contract owner only
       getAgentInfo,
       getTrustScore,
       getAgentsByOwner,
@@ -461,6 +454,7 @@ export function ContractProvider({ children }) {
       // RiskRouter
       getAgentNonce,
       isTradeProcessed,
+      getAgentDailyStats,         // NEW — daily loss now tracked correctly
       submitTradeIntent,
 
       // ValidationRegistry

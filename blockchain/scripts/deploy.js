@@ -1,175 +1,72 @@
-// scripts/deploy.js — run with: npx hardhat run scripts/deploy.js --network sepolia
-
-const hre = require("hardhat");
+const { ethers } = require("hardhat");
 
 async function main() {
-
-  const [deployer] = await hre.ethers.getSigners();
-
+  const [deployer] = await ethers.getSigners();
   console.log("Deploying with:", deployer.address);
 
-  const balance = await hre.ethers.provider.getBalance(deployer.address);
+  const feeData = await ethers.provider.getFeeData();
+  const gasPrice = (feeData.gasPrice * 150n) / 100n; // +50% buffer
+  const txOverrides = { gasPrice };
+  console.log("Gas price:", ethers.formatUnits(gasPrice, "gwei"), "gwei");
 
-  console.log("Balance:", hre.ethers.formatEther(balance), "ETH\n");
-
-
-  // ── 1. AgentRegistry ─────────────────────────────────────────
-
-  console.log("[1/4] Deploying AgentRegistry...");
-
-  const AgentRegistry = await hre.ethers.getContractFactory("AgentRegistry");
-
-  const agentRegistry = await AgentRegistry.deploy();
-
+  // 1. AgentRegistry
+  const AgentRegistry = await ethers.getContractFactory("AgentRegistry");
+  const agentRegistry = await AgentRegistry.deploy(txOverrides);
   await agentRegistry.waitForDeployment();
+  console.log("AgentRegistry:      ", await agentRegistry.getAddress());
 
-  const agentRegistryAddress = await agentRegistry.getAddress();
-
-  console.log("✅ AgentRegistry:     ", agentRegistryAddress);
-
-
-  // ── 2. ValidationRegistry ───────────────────────────────────
-
-  console.log("[2/4] Deploying ValidationRegistry...");
-
-  const ValidationRegistry = await hre.ethers.getContractFactory("ValidationRegistry");
-
-  const validationRegistry = await ValidationRegistry.deploy();
-
-  await validationRegistry.waitForDeployment();
-
-  const validationRegistryAddress = await validationRegistry.getAddress();
-
-  console.log("✅ ValidationRegistry:", validationRegistryAddress);
-
-
-  // ── 3. ReputationManager ────────────────────────────────────
-
-  console.log("[3/4] Deploying ReputationManager...");
-
-  const ReputationManager = await hre.ethers.getContractFactory("ReputationManager");
-
-  const reputationManager = await ReputationManager.deploy(
-    agentRegistryAddress,
-    validationRegistryAddress
+  // 2. ValidationRegistry
+  const ValidationRegistry = await ethers.getContractFactory("ValidationRegistry");
+  const validationRegistry = await ValidationRegistry.deploy(
+    await agentRegistry.getAddress(), txOverrides
   );
+  await validationRegistry.waitForDeployment();
+  console.log("ValidationRegistry: ", await validationRegistry.getAddress());
 
+  // 3. ReputationManager
+  const ReputationManager = await ethers.getContractFactory("ReputationManager");
+  const reputationManager = await ReputationManager.deploy(
+    await agentRegistry.getAddress(),
+    await validationRegistry.getAddress(),
+    txOverrides
+  );
   await reputationManager.waitForDeployment();
+  console.log("ReputationManager:  ", await reputationManager.getAddress());
 
-  const reputationManagerAddress = await reputationManager.getAddress();
-
-  console.log("✅ ReputationManager: ", reputationManagerAddress);
-
-
-  // ── 4. RiskRouter ───────────────────────────────────────────
-
-  console.log("[4/4] Deploying RiskRouter...");
-
-  const RiskRouter = await hre.ethers.getContractFactory("RiskRouter");
-
-  const riskRouter = await RiskRouter.deploy(agentRegistryAddress);
-
+  // 4. RiskRouter
+  const RiskRouter = await ethers.getContractFactory("RiskRouter");
+  const riskRouter = await RiskRouter.deploy(
+    await agentRegistry.getAddress(), txOverrides
+  );
   await riskRouter.waitForDeployment();
+  console.log("RiskRouter:         ", await riskRouter.getAddress());
 
-  const riskRouterAddress = await riskRouter.getAddress();
-
-  console.log("✅ RiskRouter:        ", riskRouterAddress);
-
-
-  // ── Wiring Contracts ────────────────────────────────────────
-
-  console.log("\n🔧 Wiring contracts...");
-
+  // ── Wire up permissions ──────────────────────────────────────────────────
   let tx;
 
-
-  tx = await agentRegistry.setReputationManager(reputationManagerAddress);
-
+  tx = await agentRegistry.setReputationManager(
+    await reputationManager.getAddress(), txOverrides
+  );
   await tx.wait();
+  console.log("✓ ReputationManager wired into AgentRegistry");
 
-  console.log("✅ AgentRegistry.setReputationManager →", reputationManagerAddress);
-
-
-  tx = await validationRegistry.setAuthorizedCaller(reputationManagerAddress);
-
+  tx = await reputationManager.setAuthorizedCaller(
+    await riskRouter.getAddress(), true, txOverrides
+  );
   await tx.wait();
+  console.log("✓ RiskRouter authorized in ReputationManager");
 
-  console.log("✅ ValidationRegistry.setAuthorizedCaller →", reputationManagerAddress);
-
-
-  tx = await validationRegistry.addValidator(riskRouterAddress);
-
+  tx = await validationRegistry.setAuthorizedCaller(
+    await riskRouter.getAddress(), txOverrides
+  );
   await tx.wait();
+  console.log("✓ RiskRouter authorized in ValidationRegistry");
 
-  console.log("✅ ValidationRegistry.addValidator →", riskRouterAddress);
-
-
-  tx = await reputationManager.setAuthorizedCaller(riskRouterAddress, true);
-
-  await tx.wait();
-
-  console.log("✅ ReputationManager.setAuthorizedCaller(RiskRouter) →", riskRouterAddress);
-
-
-  // ── Summary ─────────────────────────────────────────────────
-
-  console.log("\n==============================================");
-
-  console.log("  DEPLOYMENT COMPLETE — SEPOLIA TESTNET");
-
-  console.log("==============================================");
-
-  console.log("AgentRegistry:      ", agentRegistryAddress);
-
-  console.log("ValidationRegistry: ", validationRegistryAddress);
-
-  console.log("ReputationManager:  ", reputationManagerAddress);
-
-  console.log("RiskRouter:         ", riskRouterAddress);
-
-  console.log("==============================================");
-
-
-  // ── Optional: Etherscan Verification ────────────────────────
-
-  if (process.env.ETHERSCAN_API_KEY) {
-
-    console.log("\n🔍 Waiting before verification...");
-
-    await new Promise(r => setTimeout(r, 30000));
-
-
-    await hre.run("verify:verify", {
-      address: agentRegistryAddress,
-      constructorArguments: []
-    });
-
-    await hre.run("verify:verify", {
-      address: validationRegistryAddress,
-      constructorArguments: []
-    });
-
-    await hre.run("verify:verify", {
-      address: reputationManagerAddress,
-      constructorArguments: [
-        agentRegistryAddress,
-        validationRegistryAddress
-      ]
-    });
-
-    await hre.run("verify:verify", {
-      address: riskRouterAddress,
-      constructorArguments: [
-        agentRegistryAddress
-      ]
-    });
-
-    console.log("✅ All contracts verified");
-  }
-
+  console.log("\n── Update your .env ──────────────────────────────────────");
+  console.log(`VITE_AGENT_REGISTRY_ADDRESS=${await agentRegistry.getAddress()}`);
+  console.log(`VITE_VALIDATION_REGISTRY_ADDRESS=${await validationRegistry.getAddress()}`);
+  console.log(`VITE_REPUTATION_MANAGER_ADDRESS=${await reputationManager.getAddress()}`);
+  console.log(`VITE_RISK_ROUTER_ADDRESS=${await riskRouter.getAddress()}`);
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+main().catch((e) => { console.error(e); process.exit(1); });

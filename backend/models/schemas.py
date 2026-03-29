@@ -74,20 +74,20 @@ class AIDecision(BaseModel):
     # ── Explainability Engine (Feature 1) ──────────────────────────────────
     why:                   List[str]       = Field(default_factory=list)
     why_not_alternatives:  Optional[str]   = None
-    alternative_actions:   List[dict]      = Field(default_factory=list)  # [{action, confidence, reason}]
+    alternative_actions:   List[dict]      = Field(default_factory=list)
 
     # ── Proof Layer (Feature 2) ────────────────────────────────────────────
-    decision_hash:         Optional[str]   = None   # keccak/sha3 of decision data
+    decision_hash:         Optional[str]   = None
 
 
 # ─── Trade Quality Score (Feature 8) ──────────────────────────────────────────
 
 class TradeQualityScore(BaseModel):
-    trade_score:   float   # 0–10 overall
-    risk_score:    float   # 0–10
-    timing_score:  float   # 0–10 based on confidence accuracy
-    pnl_score:     float   # 0–10 based on outcome
-    label:         str     # "Excellent" | "Good" | "Average" | "Poor"
+    trade_score:   float
+    risk_score:    float
+    timing_score:  float
+    pnl_score:     float
+    label:         str
 
 
 # ─── Trade Intent ─────────────────────────────────────────────────────────────
@@ -110,23 +110,16 @@ class TradeIntent(BaseModel):
     created_at:     datetime = Field(default_factory=datetime.utcnow)
     executed_at:    Optional[datetime] = None
 
-    # ── Enhanced validation artifact fields ───────────────────────────────
     atr:               Optional[float] = None
     position_size_pct: Optional[float] = None
     stop_loss_usd:     Optional[float] = None
 
-    # ── Explainability Engine (Feature 1) ─────────────────────────────────
     why:                  List[str]              = Field(default_factory=list)
     why_not_alternatives: Optional[str]          = None
     alternative_actions:  List[dict]             = Field(default_factory=list)
 
-    # ── Proof Layer (Feature 2) ───────────────────────────────────────────
     decision_hash:        Optional[str]          = None
-
-    # ── Trade Quality Score (Feature 8) ──────────────────────────────────
     quality_score:        Optional[TradeQualityScore] = None
-
-    # ── Failure Intelligence (Feature 9) ─────────────────────────────────
     failure_reason:       Optional[str]          = None
 
 
@@ -138,22 +131,25 @@ class AgentRegistration(BaseModel):
     strategy:       Strategy
     risk_tolerance: RiskLevel = RiskLevel.MEDIUM
     max_trade_usd:  float = 1000.0
+    on_chain_id:    int | None = None
 
 
 class Agent(BaseModel):
-    id:               Optional[str] = None
-    wallet_address:   str
-    name:             str
-    strategy:         Strategy
-    risk_tolerance:   RiskLevel
-    max_trade_usd:    float
-    on_chain_id:      Optional[str] = None
-    trust_score:      float = 50.0
-    total_trades:     int   = 0
-    profitable_trades:int   = 0
-    total_pnl:        float = 0.0
-    vault_balance:    float = 10_000.0
-    created_at:       datetime = Field(default_factory=datetime.utcnow)
+    id:                Optional[str] = None
+    wallet_address:    str
+    name:              str
+    strategy:          Strategy
+    risk_tolerance:    RiskLevel
+    max_trade_usd:     float
+    # FIX: was Optional[str] — must match AgentRegistration which sends int.
+    # The contract emits agentId as uint256 → JS Number → JSON integer.
+    on_chain_id:       int | None = None
+    trust_score:       float = 50.0
+    total_trades:      int   = 0
+    profitable_trades: int   = 0
+    total_pnl:         float = 0.0
+    vault_balance:     float = 10_000.0
+    created_at:        datetime = Field(default_factory=datetime.utcnow)
 
 
 # ─── Validation Proof ─────────────────────────────────────────────────────────
@@ -169,7 +165,7 @@ class ValidationProof(BaseModel):
     pnl:              Optional[float] = None
     validator_score:  Optional[float] = None
     on_chain_tx:      Optional[str]   = None
-    decision_hash:    Optional[str]   = None   # proof layer
+    decision_hash:    Optional[str]   = None
     timestamp:        datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -207,7 +203,7 @@ class StrategyComparisonResult(BaseModel):
     confidence: float
     amount_usd: float
     reason:     str
-    sim_pnl:    Optional[float] = None   # simulated PnL based on 24h change
+    sim_pnl:    Optional[float] = None
 
 
 # ─── Copilot Chat (Feature 7) ────────────────────────────────────────────────
@@ -215,12 +211,12 @@ class StrategyComparisonResult(BaseModel):
 class CopilotMessage(BaseModel):
     wallet_address: str
     message:        str
-    history:        List[dict] = Field(default_factory=list)  # [{role, content}]
+    history:        List[dict] = Field(default_factory=list)
 
 
 class CopilotResponse(BaseModel):
     reply:   str
-    sources: List[str] = Field(default_factory=list)  # trade IDs referenced
+    sources: List[str] = Field(default_factory=list)
 
 
 # ─── Dashboard ────────────────────────────────────────────────────────────────
@@ -234,19 +230,16 @@ class DashboardStats(BaseModel):
     recent_trades:     List[TradeIntent]
     risk_heatmap:      List[RiskHeatmapEntry]
 
-    # ── Risk-adjusted metrics ─────────────────────────────────────────────
     sharpe_ratio:           Optional[float] = None
     max_drawdown:           Optional[float] = None
     max_drawdown_pct:       Optional[float] = None
     current_drawdown:       Optional[float] = None
     circuit_breaker_active: bool            = False
 
-    # ── Vault accounting ──────────────────────────────────────────────────
     vault_balance:  float = 10_000.0
     vault_initial:  float = 10_000.0
     daily_loss_usd: float = 0.0
     daily_loss_pct: float = 0.0
     equity_curve:   List[dict] = Field(default_factory=list)
 
-    # ── Failure Intelligence (Feature 9) ─────────────────────────────────
     failed_trade_analysis: List[dict] = Field(default_factory=list)
