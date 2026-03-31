@@ -19,52 +19,176 @@ function actionColor(a) {
   if (a === "SELL") return "red";
   return "default";
 }
-
 function fmt2(n) { return n != null ? n.toFixed(2) : "—"; }
 function fmt4(n) { return n != null ? n.toFixed(4) : "—"; }
+
+// ── Inline styles (matching Home.jsx design language) ─────────────────────────
+const S = {
+  // Section label — same as .slabel in CSS
+  slabel: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    fontWeight: 600,
+    textTransform: "uppercase",
+    letterSpacing: "0.12em",
+    color: "var(--accent)",
+    marginBottom: 10,
+    display: "block",
+  },
+  // Section heading
+  h2: {
+    fontFamily: "'Syne', sans-serif",
+    fontSize: "clamp(16px,2vw,22px)",
+    fontWeight: 800,
+    color: "var(--text)",
+    letterSpacing: "-0.02em",
+    lineHeight: 1.15,
+    margin: 0,
+  },
+  // Accent card (same as .acard)
+  acard: {
+    background: "var(--card)",
+    border: "1px solid var(--border)",
+    borderRadius: 16,
+    padding: "18px 20px",
+    position: "relative",
+    overflow: "hidden",
+    transition: "transform 0.2s ease, box-shadow 0.2s ease",
+  },
+  // Metric value
+  metricVal: {
+    fontFamily: "'Syne', sans-serif",
+    fontSize: 26,
+    fontWeight: 800,
+    lineHeight: 1,
+    letterSpacing: "-0.03em",
+    marginBottom: 4,
+  },
+  metricLabel: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    color: "var(--dim)",
+    textTransform: "uppercase",
+    letterSpacing: "0.08em",
+  },
+  metricSub: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    color: "var(--dim)",
+    marginTop: 2,
+  },
+  mono: { fontFamily: "'JetBrains Mono', monospace" },
+  tag: {
+    display: "inline-flex",
+    alignItems: "center",
+    padding: "3px 10px",
+    borderRadius: 999,
+    fontSize: 11,
+    fontFamily: "'JetBrains Mono', monospace",
+    fontWeight: 600,
+    border: "1px solid var(--border)",
+  },
+};
+
+// ── Accent Card (matches acard CSS class) ─────────────────────────────────────
+function ACard({ children, ac = "var(--accent)", style = {}, onHover }) {
+  const [hov, setHov] = useState(false);
+  return (
+    <div
+      style={{
+        ...S.acard,
+        transform: hov ? "translateY(-3px)" : "none",
+        boxShadow: hov ? "0 10px 32px rgba(0,0,0,0.14)" : "none",
+        ...style,
+      }}
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => setHov(false)}
+    >
+      {/* Top accent bar */}
+      <div style={{
+        position: "absolute", top: 0, left: 0, right: 0, height: 3,
+        borderRadius: "16px 16px 0 0", background: ac,
+      }} />
+      {children}
+    </div>
+  );
+}
+
+// ── Stat Metric ───────────────────────────────────────────────────────────────
+function Metric({ label, value, sub, color = "var(--text)", ac }) {
+  return (
+    <ACard ac={ac || "var(--accent)"}>
+      <p style={S.metricLabel}>{label}</p>
+      <p style={{ ...S.metricVal, color, marginTop: 6 }}>{value}</p>
+      {sub && <p style={S.metricSub}>{sub}</p>}
+    </ACard>
+  );
+}
+
+// ── Colored Tag / Badge ───────────────────────────────────────────────────────
+function Tag({ children, variant = "default" }) {
+  const colors = {
+    green:   { bg: "rgba(34,197,94,0.12)",  color: "var(--green)",  border: "rgba(34,197,94,0.3)" },
+    red:     { bg: "rgba(239,68,68,0.12)",  color: "var(--red)",    border: "rgba(239,68,68,0.3)" },
+    blue:    { bg: "rgba(59,130,246,0.12)", color: "var(--accent)",  border: "rgba(59,130,246,0.3)" },
+    yellow:  { bg: "rgba(245,158,11,0.12)", color: "var(--yellow)",  border: "rgba(245,158,11,0.3)" },
+    default: { bg: "var(--muted)",           color: "var(--dim)",    border: "var(--border)" },
+  };
+  const c = colors[variant] || colors.default;
+  return (
+    <span style={{ ...S.tag, background: c.bg, color: c.color, borderColor: c.border }}>
+      {children}
+    </span>
+  );
+}
+
+// ── Divider ───────────────────────────────────────────────────────────────────
+function Divider() {
+  return <div style={{ height: 1, background: "var(--border)", margin: "0" }} />;
+}
 
 // ── Equity Curve ──────────────────────────────────────────────────────────────
 function EquityCurve({ data }) {
   if (!data || data.length < 2)
     return (
-      <div className="flex items-center justify-center h-32 text-xs text-dim mono">
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "center",
+        height: 96, color: "var(--dim)", fontFamily: "'JetBrains Mono', monospace", fontSize: 11,
+      }}>
         Execute trades to see your equity curve
       </div>
     );
 
   const W = 600, H = 120, PAD = 10;
   const values = data.map((d) => d.equity);
-  const minV = Math.min(...values);
-  const maxV = Math.max(...values);
+  const minV = Math.min(...values), maxV = Math.max(...values);
   const range = maxV - minV || 1;
-
   const toX = (i) => PAD + (i / (data.length - 1)) * (W - PAD * 2);
   const toY = (v) => H - PAD - ((v - minV) / range) * (H - PAD * 2);
-
-  const pathD = data
-    .map((d, i) => `${i === 0 ? "M" : "L"} ${toX(i).toFixed(1)} ${toY(d.equity).toFixed(1)}`)
-    .join(" ");
-  const areaD =
-    pathD +
-    ` L ${toX(data.length - 1).toFixed(1)} ${H - PAD} L ${PAD} ${H - PAD} Z`;
+  const pathD = data.map((d, i) => `${i === 0 ? "M" : "L"} ${toX(i).toFixed(1)} ${toY(d.equity).toFixed(1)}`).join(" ");
+  const areaD = pathD + ` L ${toX(data.length - 1).toFixed(1)} ${H - PAD} L ${PAD} ${H - PAD} Z`;
   const isProfit = values[values.length - 1] >= values[0];
   const lastVal = values[values.length - 1];
 
   return (
-    <div className="w-full overflow-x-auto">
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-28" preserveAspectRatio="none">
+    <div style={{ width: "100%", overflowX: "auto" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: 112 }} preserveAspectRatio="none">
         <defs>
           <linearGradient id="eq-grad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={isProfit ? "#22c55e" : "#ef4444"} stopOpacity="0.3" />
+            <stop offset="0%" stopColor={isProfit ? "#22c55e" : "#ef4444"} stopOpacity="0.25" />
             <stop offset="100%" stopColor={isProfit ? "#22c55e" : "#ef4444"} stopOpacity="0" />
           </linearGradient>
         </defs>
         <path d={areaD} fill="url(#eq-grad)" />
         <path d={pathD} fill="none" stroke={isProfit ? "#22c55e" : "#ef4444"} strokeWidth="1.5" />
       </svg>
-      <div className="flex justify-between text-xs mono text-dim mt-0.5 px-1">
+      <div style={{
+        display: "flex", justifyContent: "space-between",
+        fontFamily: "'JetBrains Mono', monospace", fontSize: 10,
+        color: "var(--dim)", marginTop: 4, padding: "0 4px",
+      }}>
         <span>{data[0]?.timestamp}</span>
-        <span className={isProfit ? "text-green" : "text-red"}>
+        <span style={{ color: isProfit ? "var(--green)" : "var(--red)", fontWeight: 600 }}>
           ${lastVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
         </span>
         <span>{data[data.length - 1]?.timestamp}</span>
@@ -75,17 +199,20 @@ function EquityCurve({ data }) {
 
 // ── Drawdown Bar ──────────────────────────────────────────────────────────────
 function DrawdownBar({ pct, label }) {
-  const color = pct > 15 ? "bg-red" : pct > 8 ? "bg-yellow" : "bg-green";
+  const color = pct > 15 ? "var(--red)" : pct > 8 ? "var(--yellow)" : "var(--green)";
   return (
     <div>
-      <div className="flex justify-between text-xs mono mb-1">
-        <span className="text-dim">{label}</span>
-        <span className={pct > 15 ? "text-red" : pct > 8 ? "text-yellow" : "text-green"}>
-          {fmt2(pct)}%
-        </span>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontFamily: "'JetBrains Mono', monospace", marginBottom: 5 }}>
+        <span style={{ color: "var(--dim)" }}>{label}</span>
+        <span style={{ color, fontWeight: 600 }}>{fmt2(pct)}%</span>
       </div>
-      <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-        <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${Math.min(pct, 100)}%` }} />
+      <div style={{ height: 4, background: "var(--muted)", borderRadius: 99, overflow: "hidden" }}>
+        <div style={{
+          height: "100%", borderRadius: 99,
+          width: `${Math.min(pct, 100)}%`,
+          background: color,
+          transition: "width 0.6s ease",
+        }} />
       </div>
     </div>
   );
@@ -93,40 +220,24 @@ function DrawdownBar({ pct, label }) {
 
 // ── On-Chain Performance Panel ────────────────────────────────────────────────
 function OnChainPerformance({ agentId }) {
-  // CHANGE: added getAgentDailyStats to destructure — now available from fixed
-  // ContractContext. Used to show the real on-chain daily loss exposure, which
-  // was previously dead (totalLossUsd was never incremented in the old contract).
-  const {
-    getAgentPerformance,
-    getAgentInfo,
-    getTrustScore,
-    getAgentDailyStats,
-  } = useContracts();
-
-  const [perf,       setPerf]       = useState(null);
-  const [info,       setInfo]       = useState(null);
-  const [trust,      setTrust]      = useState(null);
-  const [dailyStats, setDailyStats] = useState(null); // CHANGE: new state
-  const [busy,       setBusy]       = useState(false);
+  const { getAgentPerformance, getAgentInfo, getTrustScore, getAgentDailyStats } = useContracts();
+  const [perf, setPerf] = useState(null);
+  const [info, setInfo] = useState(null);
+  const [trust, setTrust] = useState(null);
+  const [dailyStats, setDailyStats] = useState(null);
+  const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     if (!agentId) return;
     setBusy(true);
     try {
-      // CHANGE: fetch daily stats in parallel with the existing calls.
-      // getAgentDailyStats is new — returns { date, totalLossUsd, tradeCount }.
-      // totalLossUsd is now real because the fixed RiskRouter actually increments
-      // it on every approved trade. In the old contract this was always 0.
       const [p, i, t, ds] = await Promise.all([
         getAgentPerformance(agentId),
         getAgentInfo(agentId),
         getTrustScore(agentId),
-        getAgentDailyStats(agentId).catch(() => null), // non-fatal if contract old
+        getAgentDailyStats(agentId).catch(() => null),
       ]);
-      setPerf(p);
-      setInfo(i);
-      setTrust(t);
-      setDailyStats(ds);
+      setPerf(p); setInfo(i); setTrust(t); setDailyStats(ds);
     } catch (e) {
       console.warn("On-chain fetch failed:", e.message);
     } finally {
@@ -135,125 +246,133 @@ function OnChainPerformance({ agentId }) {
   }, [agentId, getAgentPerformance, getAgentInfo, getTrustScore, getAgentDailyStats]);
 
   useEffect(() => { load(); }, [load]);
-
   if (!agentId) return null;
 
-  // CHANGE: compute USD value from cents (contract stores amountUsd in cents)
-  const dailyLossUsd   = dailyStats ? dailyStats.totalLossUsd / 100 : null;
+  const dailyLossUsd    = dailyStats ? dailyStats.totalLossUsd / 100 : null;
   const dailyTradeCount = dailyStats?.tradeCount ?? null;
 
   return (
-    <div className="mt-6">
-      <div className="flex items-center justify-between mb-3">
-        <SectionTitle>
-          <span className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-blue animate-pulse inline-block" />
-            On-Chain Metrics
-          </span>
-        </SectionTitle>
-        <ActionBtn onClick={load} loading={busy} variant="secondary">Sync</ActionBtn>
+    <section>
+      {/* Section header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <div>
+          <span style={S.slabel}>On-Chain</span>
+          <h2 style={S.h2}>Live Blockchain Metrics</h2>
+        </div>
+        <button
+          onClick={load}
+          disabled={busy}
+          style={{
+            display: "flex", alignItems: "center", gap: 6,
+            padding: "7px 14px", borderRadius: 10,
+            border: "1px solid var(--border)", background: "var(--card)",
+            color: "var(--dim)", cursor: busy ? "not-allowed" : "pointer",
+            fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 600,
+            opacity: busy ? 0.5 : 1, transition: "border-color 0.15s, color 0.15s",
+          }}
+        >
+          {busy ? "Syncing…" : "↻ Sync"}
+        </button>
       </div>
 
       {busy && !perf ? (
-        <div className="flex justify-center py-6"><Spinner size={5} /></div>
+        <div style={{ display: "flex", justifyContent: "center", padding: "32px 0" }}>
+          <Spinner size={5} />
+        </div>
       ) : perf || info || trust != null ? (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
           {trust != null && (
-            <StatBox
-              label="On-Chain Trust"
+            <Metric
+              label="Trust Score"
               value={`${trust} / 100`}
-              color={trust >= 70 ? "text-green" : trust >= 40 ? "text-yellow" : "text-red"}
               sub="Reputation Manager"
+              color={trust >= 70 ? "var(--green)" : trust >= 40 ? "var(--yellow)" : "var(--red)"}
+              ac={trust >= 70 ? "var(--green)" : trust >= 40 ? "var(--yellow)" : "var(--red)"}
             />
           )}
           {perf && (
             <>
-              <StatBox
+              <Metric
                 label="Win Rate (chain)"
                 value={`${fmt2(perf.winRatePct)}%`}
                 sub={`${perf.tradeCount} settled trades`}
+                ac="var(--accent)"
               />
-              <StatBox
+              <Metric
                 label="Max Drawdown"
                 value={`${fmt2(perf.maxDrawdownBps / 100)}%`}
-                color={perf.maxDrawdownBps / 100 > 15 ? "text-red" : perf.maxDrawdownBps / 100 > 8 ? "text-yellow" : "text-green"}
+                color={perf.maxDrawdownBps / 100 > 15 ? "var(--red)" : perf.maxDrawdownBps / 100 > 8 ? "var(--yellow)" : "var(--green)"}
                 sub="Peak → Trough"
+                ac={perf.maxDrawdownBps / 100 > 15 ? "var(--red)" : "var(--accent)"}
               />
-              <StatBox
+              <Metric
                 label="Avg PnL / Trade"
                 value={`${perf.avgPnlBps > 0 ? "+" : ""}${fmt2(perf.avgPnlBps / 100)}%`}
-                color={perf.avgPnlBps >= 0 ? "text-green" : "text-red"}
+                color={perf.avgPnlBps >= 0 ? "var(--green)" : "var(--red)"}
                 sub={perf.sharpeProxy != null ? `Sharpe ≈ ${perf.sharpeProxy.toFixed(2)}` : "Sharpe: N/A"}
+                ac={perf.avgPnlBps >= 0 ? "var(--green)" : "var(--red)"}
               />
             </>
           )}
 
-          {/* CHANGE: On-chain daily loss card — powered by the fixed RiskRouter.
-              Previously totalLossUsd was always 0 because _updateDailyStats
-              never incremented it. The fix makes this card show real data. */}
           {dailyStats && (
-            <Card className="col-span-2 sm:col-span-2">
-              <p className="text-xs text-dim mono font-semibold mb-2">On-Chain Daily Exposure</p>
-              <div className="grid grid-cols-2 gap-3">
+            <ACard ac="var(--accent2)" style={{ gridColumn: "span 2" }}>
+              <p style={{ ...S.metricLabel, marginBottom: 12 }}>On-Chain Daily Exposure</p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                 <div>
-                  <p className="text-xs text-dim mono">Today's Loss Exposure</p>
-                  <p className={`text-base font-semibold mono mt-0.5 ${
-                    dailyLossUsd > 500 ? "text-red" :
-                    dailyLossUsd > 100 ? "text-yellow" : "text-green"
-                  }`}>
+                  <p style={{ ...S.metricLabel, marginBottom: 4 }}>Loss Exposure Today</p>
+                  <p style={{
+                    ...S.metricVal, fontSize: 20,
+                    color: dailyLossUsd > 500 ? "var(--red)" : dailyLossUsd > 100 ? "var(--yellow)" : "var(--green)",
+                  }}>
                     ${fmt2(dailyLossUsd)}
                   </p>
-                  <p className="text-xs text-dim mono mt-0.5">Tracked by RiskRouter</p>
+                  <p style={S.metricSub}>Tracked by RiskRouter</p>
                 </div>
                 <div>
-                  <p className="text-xs text-dim mono">Trades Today (chain)</p>
-                  <p className="text-base font-semibold mono mt-0.5 text-text">
+                  <p style={{ ...S.metricLabel, marginBottom: 4 }}>Trades Today</p>
+                  <p style={{ ...S.metricVal, fontSize: 20, color: "var(--text)" }}>
                     {dailyTradeCount ?? "—"}
                   </p>
-                  <p className="text-xs text-dim mono mt-0.5">Approved by RiskRouter</p>
+                  <p style={S.metricSub}>Approved by RiskRouter</p>
                 </div>
               </div>
-            </Card>
+            </ACard>
           )}
 
           {info && (
-            <Card className="col-span-2 sm:col-span-4">
-              <div className="flex flex-wrap gap-4 text-xs mono">
-                <div>
-                  <span className="text-dim">Contract Name: </span>
-                  <span className="text-text">{info.name}</span>
-                </div>
-                <div>
-                  <span className="text-dim">Strategy: </span>
-                  <span className="text-blue">{info.strategy}</span>
-                </div>
-                <div>
-                  <span className="text-dim">Total Trades (chain): </span>
-                  <span className="text-text">{info.totalTrades}</span>
-                </div>
-                <div>
-                  <span className="text-dim">Active: </span>
-                  <span className={info.active ? "text-green" : "text-red"}>
-                    {info.active ? "Yes" : "No"}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-dim">Profitable Trades: </span>
-                  <span className="text-green">{info.profitableTrades}</span>
-                </div>
+            <ACard ac="var(--purple)" style={{ gridColumn: "1 / -1" }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "12px 24px" }}>
+                {[
+                  ["Contract", info.name],
+                  ["Strategy", info.strategy],
+                  ["Total Trades", info.totalTrades],
+                  ["Profitable", info.profitableTrades],
+                  ["Active", info.active ? "Yes" : "No"],
+                ].map(([k, v]) => (
+                  <div key={k}>
+                    <p style={S.metricLabel}>{k}</p>
+                    <p style={{
+                      ...S.mono, fontSize: 13, fontWeight: 600, color: "var(--text)", marginTop: 2,
+                      ...(k === "Active" ? { color: info.active ? "var(--green)" : "var(--red)" } : {}),
+                      ...(k === "Strategy" ? { color: "var(--accent)" } : {}),
+                    }}>{v}</p>
+                  </div>
+                ))}
               </div>
-            </Card>
+            </ACard>
           )}
         </div>
       ) : (
-        <Card>
-          <p className="text-xs mono text-dim">
-            No on-chain data found for agent ID <span className="text-text">{agentId}</span>.
+        <ACard ac="var(--border)">
+          <p style={{ ...S.mono, fontSize: 12, color: "var(--dim)" }}>
+            No on-chain data for agent ID{" "}
+            <span style={{ color: "var(--text)" }}>{agentId}</span>.
             Data appears after trades are settled on-chain.
           </p>
-        </Card>
+        </ACard>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -278,73 +397,94 @@ function FailurePanel({ account }) {
   };
 
   return (
-    <div className="mt-6">
-      <div className="flex items-center justify-between mb-3">
-        <SectionTitle>Failure Intelligence</SectionTitle>
-        <ActionBtn onClick={load} loading={busy} variant="secondary">
-          {open ? "Refresh" : "Analyse"}
-        </ActionBtn>
+    <section>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <div>
+          <span style={S.slabel}>Intelligence</span>
+          <h2 style={S.h2}>Failure Analysis</h2>
+        </div>
+        <button
+          onClick={load}
+          disabled={busy}
+          style={{
+            display: "flex", alignItems: "center", gap: 6,
+            padding: "7px 14px", borderRadius: 10,
+            border: "1px solid var(--border)", background: "var(--card)",
+            color: "var(--dim)", cursor: busy ? "not-allowed" : "pointer",
+            fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 600,
+            opacity: busy ? 0.5 : 1,
+          }}
+        >
+          {busy ? "Analysing…" : open ? "↻ Refresh" : "Analyse →"}
+        </button>
       </div>
 
       {open && data && (
-        <Card>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-4">
+        <ACard ac="var(--red)">
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 16, marginBottom: 20 }}>
             <div>
-              <p className="text-xs text-dim mono">Total Failures</p>
-              <p className="text-lg font-semibold mono text-red mt-0.5">{data.total_failures}</p>
+              <p style={S.metricLabel}>Total Failures</p>
+              <p style={{ ...S.metricVal, fontSize: 28, color: "var(--red)", marginTop: 4 }}>{data.total_failures}</p>
             </div>
             <div>
-              <p className="text-xs text-dim mono">Total Loss</p>
-              <p className="text-lg font-semibold mono text-red mt-0.5">${fmt4(data.total_loss)}</p>
+              <p style={S.metricLabel}>Total Loss</p>
+              <p style={{ ...S.metricVal, fontSize: 28, color: "var(--red)", marginTop: 4 }}>${fmt4(data.total_loss)}</p>
             </div>
-            <div className="col-span-2 sm:col-span-1">
-              <p className="text-xs text-dim mono">Top Pattern</p>
-              <p className="text-sm font-semibold mono text-yellow mt-0.5">{data.top_failure_pattern || "None"}</p>
+            <div>
+              <p style={S.metricLabel}>Top Pattern</p>
+              <p style={{ ...S.mono, fontSize: 12, color: "var(--yellow)", fontWeight: 600, marginTop: 4 }}>
+                {data.top_failure_pattern || "None identified"}
+              </p>
             </div>
           </div>
 
           {data.recommendations?.length > 0 && (
-            <div className="mb-4">
-              <p className="text-xs mono text-dim font-semibold mb-2">AI Recommendations</p>
-              <ul className="space-y-1.5">
+            <div style={{ marginBottom: 16 }}>
+              <p style={{ ...S.metricLabel, marginBottom: 8 }}>AI Recommendations</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {data.recommendations.map((r, i) => (
-                  <li key={i} className="flex gap-2 text-xs mono text-text">
-                    <span className="text-blue shrink-0">→</span>
-                    <span>{r}</span>
-                  </li>
+                  <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                    <span style={{ color: "var(--accent)", fontSize: 12, marginTop: 1, flexShrink: 0 }}>→</span>
+                    <span style={{ ...S.mono, fontSize: 11, color: "var(--text2)", lineHeight: 1.5 }}>{r}</span>
+                  </div>
                 ))}
-              </ul>
+              </div>
             </div>
           )}
 
           {data.failed_trades?.length > 0 && (
-            <div className="overflow-x-auto">
-              <p className="text-xs mono text-dim font-semibold mb-2">Failed Trades</p>
-              <table className="w-full text-xs mono min-w-[500px]">
-                <thead>
-                  <tr className="text-dim border-b border-border">
-                    <th className="text-left pb-2 font-medium">Pair</th>
-                    <th className="text-left pb-2 font-medium">Action</th>
-                    <th className="text-left pb-2 font-medium">Loss</th>
-                    <th className="text-left pb-2 font-medium">Reason</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.failed_trades.map((t) => (
-                    <tr key={t.id} className="border-b border-border/40 last:border-0">
-                      <td className="py-1.5 text-text">{t.token_pair}</td>
-                      <td className="py-1.5"><Badge variant={actionColor(t.action)}>{t.action}</Badge></td>
-                      <td className="py-1.5 text-red">${fmt4(t.pnl)}</td>
-                      <td className="py-1.5 text-dim truncate max-w-[200px]">{t.reason}</td>
+            <>
+              <Divider />
+              <p style={{ ...S.metricLabel, margin: "12px 0 8px" }}>Failed Trades</p>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 480 }}>
+                  <thead>
+                    <tr>
+                      {["Pair","Action","Loss","Reason"].map(h => (
+                        <th key={h} style={{
+                          textAlign: "left", paddingBottom: 8,
+                          ...S.metricLabel, borderBottom: "1px solid var(--border)",
+                        }}>{h}</th>
+                      ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {data.failed_trades.map((t) => (
+                      <tr key={t.id} style={{ borderBottom: "1px solid rgba(30,42,58,0.4)" }}>
+                        <td style={{ padding: "10px 0", ...S.mono, fontSize: 12, color: "var(--text)" }}>{t.token_pair}</td>
+                        <td style={{ padding: "10px 0" }}><Tag variant={actionColor(t.action)}>{t.action}</Tag></td>
+                        <td style={{ padding: "10px 0", ...S.mono, fontSize: 12, color: "var(--red)", fontWeight: 600 }}>${fmt4(t.pnl)}</td>
+                        <td style={{ padding: "10px 0", ...S.mono, fontSize: 11, color: "var(--dim)", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
-        </Card>
+        </ACard>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -367,39 +507,36 @@ function QualityPanel({ account }) {
   }, [account]);
 
   useEffect(() => { load(); }, [load]);
-
   if (!data && !busy) return null;
 
   return (
-    <div className="mt-4">
-      <SectionTitle>Trade Quality</SectionTitle>
+    <div>
+      <p style={{ ...S.metricLabel, marginBottom: 12 }}>Trade Quality</p>
       {busy ? (
-        <div className="flex justify-center py-4"><Spinner size={4} /></div>
+        <div style={{ display: "flex", justifyContent: "center", padding: "16px 0" }}><Spinner size={4} /></div>
       ) : data ? (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <StatBox
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+          <Metric
             label="Avg Quality Score"
             value={`${data.avg_quality_score?.toFixed(1)} / 100`}
-            color={
-              data.avg_quality_score >= 70 ? "text-green" :
-              data.avg_quality_score >= 40 ? "text-yellow" : "text-red"
-            }
             sub={data.label}
+            color={data.avg_quality_score >= 70 ? "var(--green)" : data.avg_quality_score >= 40 ? "var(--yellow)" : "var(--red)"}
+            ac={data.avg_quality_score >= 70 ? "var(--green)" : "var(--accent)"}
           />
-          <StatBox label="Scored Trades" value={data.total_scored_trades} sub="Total evaluated" />
+          <Metric label="Scored Trades" value={data.total_scored_trades} sub="Total evaluated" ac="var(--accent2)" />
           {data.best && (
-            <Card>
-              <p className="text-xs text-dim mono">Best Trade</p>
-              <p className="text-sm font-semibold mono text-green mt-1">{data.best.token_pair}</p>
-              <p className="text-xs mono text-dim mt-0.5">Score: {data.best.quality_score?.toFixed(1)}</p>
-            </Card>
+            <ACard ac="var(--green)">
+              <p style={S.metricLabel}>Best Trade</p>
+              <p style={{ ...S.mono, fontSize: 14, fontWeight: 700, color: "var(--green)", margin: "6px 0 2px" }}>{data.best.token_pair}</p>
+              <p style={S.metricSub}>Score: {data.best.quality_score?.toFixed(1)}</p>
+            </ACard>
           )}
           {data.worst && (
-            <Card>
-              <p className="text-xs text-dim mono">Worst Trade</p>
-              <p className="text-sm font-semibold mono text-red mt-1">{data.worst.token_pair}</p>
-              <p className="text-xs mono text-dim mt-0.5">Score: {data.worst.quality_score?.toFixed(1)}</p>
-            </Card>
+            <ACard ac="var(--red)">
+              <p style={S.metricLabel}>Worst Trade</p>
+              <p style={{ ...S.mono, fontSize: 14, fontWeight: 700, color: "var(--red)", margin: "6px 0 2px" }}>{data.worst.token_pair}</p>
+              <p style={S.metricSub}>Score: {data.worst.quality_score?.toFixed(1)}</p>
+            </ACard>
           )}
         </div>
       ) : null}
@@ -421,15 +558,9 @@ export default function Dashboard() {
   const [lastFetch, setLastFetch] = useState(null);
   const [onChainId, setOnChainId] = useState(null);
 
-  // Resolve on-chain agent ID: prefer agent.on_chain_id, else lookup via contract
   useEffect(() => {
     if (!agent || !account) { setOnChainId(null); return; }
-
-    if (agent.on_chain_id) {
-      setOnChainId(Number(agent.on_chain_id));
-      return;
-    }
-
+    if (agent.on_chain_id) { setOnChainId(Number(agent.on_chain_id)); return; }
     getAgentsByOwner(account)
       .then((ids) => { if (ids.length > 0) setOnChainId(ids[ids.length - 1]); })
       .catch(() => {});
@@ -437,8 +568,7 @@ export default function Dashboard() {
 
   const fetchStats = useCallback(async () => {
     if (!account || !agent) return;
-    setLoading(true);
-    setError(null);
+    setLoading(true); setError(null);
     try {
       const data = await getDashboard(account);
       setStats(data);
@@ -454,322 +584,402 @@ export default function Dashboard() {
 
   // ── Guard states ────────────────────────────────────────────────────────────
   if (!account)     return <ConnectPrompt />;
-  if (agentLoading) return <div className="flex justify-center py-20"><Spinner size={6} /></div>;
+  if (agentLoading) return <div style={{ display: "flex", justifyContent: "center", padding: "80px 0" }}><Spinner size={6} /></div>;
   if (!agent)
     return (
-      <div className="max-w-6xl mx-auto px-4 py-8 space-y-4">
-        <div className="px-3 py-2 rounded border border-yellow/20 bg-yellow/5">
-          <p className="text-xs mono text-yellow">
-            No agent found for <span className="text-text">{account}</span>.
-            Register below to start trading.
+      <div style={{ maxWidth: 900, margin: "0 auto", padding: "32px 24px" }}>
+        <div style={{
+          padding: "10px 16px", borderRadius: 10,
+          border: "1px solid rgba(245,158,11,0.25)",
+          background: "rgba(245,158,11,0.06)",
+          marginBottom: 16,
+        }}>
+          <p style={{ ...S.mono, fontSize: 11, color: "var(--yellow)" }}>
+            No agent found for <span style={{ color: "var(--text)" }}>{account}</span>. Register below to start trading.
           </p>
         </div>
         <RegisterAgent />
       </div>
     );
 
-  return (
-    <div className="max-w-6xl mx-auto px-4 py-8 space-y-8">
+  // Accent colors (same palette as Home.jsx)
+  const acColors = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "var(--c5)", "var(--c6)"];
 
-      {/* ── Agent Info ────────────────────────────────────────────────────── */}
-      <div>
-        <SectionTitle>Agent</SectionTitle>
-        <Card>
-          <div className="flex items-start justify-between flex-wrap gap-3">
+  return (
+    <div style={{
+      maxWidth: 1100,
+      margin: "0 auto",
+      padding: "40px 24px",
+      display: "flex",
+      flexDirection: "column",
+      gap: 52,
+    }}>
+
+      {/* ════════════════════════════════════════════════════
+          AGENT HERO CARD
+      ════════════════════════════════════════════════════ */}
+      <section>
+        <span style={S.slabel}>Agent</span>
+        <div style={{
+          background: "var(--card)",
+          border: "1px solid var(--border)",
+          borderRadius: 20,
+          padding: "24px 28px",
+          position: "relative",
+          overflow: "hidden",
+        }}>
+          {/* Gradient top bar */}
+          <div style={{
+            position: "absolute", top: 0, left: 0, right: 0, height: 3,
+            background: "linear-gradient(90deg, var(--accent), var(--accent2))",
+            borderRadius: "20px 20px 0 0",
+          }} />
+
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
             <div>
-              <p className="text-base font-semibold mono text-text">{agent.name}</p>
-              <p className="text-xs text-dim mono mt-0.5 break-all">{agent.wallet_address}</p>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                {/* Live dot */}
+                {onChainId != null && (
+                  <span style={{
+                    display: "inline-flex", alignItems: "center", gap: 5,
+                    padding: "2px 8px", borderRadius: 99,
+                    background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)",
+                    fontFamily: "'JetBrains Mono', monospace", fontSize: 9, fontWeight: 600,
+                    color: "var(--green)", textTransform: "uppercase", letterSpacing: "0.08em",
+                  }}>
+                    <span style={{
+                      width: 5, height: 5, borderRadius: "50%",
+                      background: "var(--green)", animation: "pdot 2s ease-in-out infinite",
+                      display: "inline-block",
+                    }} />
+                    On-chain
+                  </span>
+                )}
+              </div>
+
+              <h1 style={{
+                fontFamily: "'Syne', sans-serif", fontSize: 22, fontWeight: 800,
+                color: "var(--text)", letterSpacing: "-0.02em", margin: 0,
+              }}>
+                {agent.name}
+              </h1>
+              <p style={{ ...S.mono, fontSize: 11, color: "var(--dim)", marginTop: 4, wordBreak: "break-all" }}>
+                {agent.wallet_address}
+              </p>
               {onChainId != null && (
-                <p className="text-xs text-dim mono mt-0.5">
-                  On-chain ID:{" "}
-                  <span className="text-blue font-semibold">#{onChainId}</span>
-                </p>
-              )}
-              {agent.on_chain_id && (
-                <p className="text-xs text-dim mono mt-0.5">
-                  Registry ID:{" "}
-                  <span className="text-blue">{agent.on_chain_id}</span>
+                <p style={{ ...S.mono, fontSize: 11, color: "var(--dim)", marginTop: 4 }}>
+                  On-chain ID: <span style={{ color: "var(--accent)", fontWeight: 700 }}>#{onChainId}</span>
                 </p>
               )}
             </div>
-            <div className="flex gap-2 flex-wrap">
-              <Badge variant="blue">{agent.strategy}</Badge>
-              <Badge
-                variant={
-                  agent.risk_tolerance === "HIGH" ? "red" :
-                  agent.risk_tolerance === "LOW"  ? "green" : "yellow"
-                }
-              >
+
+            {/* Tags */}
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-start" }}>
+              <Tag variant="blue">{agent.strategy}</Tag>
+              <Tag variant={agent.risk_tolerance === "HIGH" ? "red" : agent.risk_tolerance === "LOW" ? "green" : "yellow"}>
                 {agent.risk_tolerance} risk
-              </Badge>
-              <Badge variant="default">Max ${agent.max_trade_usd}</Badge>
-              {onChainId != null && <Badge variant="blue">⛓ On-chain</Badge>}
+              </Tag>
+              <Tag variant="default">Max ${agent.max_trade_usd}</Tag>
             </div>
           </div>
-        </Card>
-      </div>
+        </div>
+      </section>
 
-      {/* ── On-Chain Metrics (live from blockchain) ─────────────────────── */}
-      {/* CHANGE: OnChainPerformance now also fetches and renders
-          getAgentDailyStats() — the on-chain daily loss exposure panel.
-          This was always rendered before but showed $0 because the old
-          RiskRouter never wrote to totalLossUsd. Now it shows real values. */}
+      {/* ════════════════════════════════════════════════════
+          ON-CHAIN METRICS
+      ════════════════════════════════════════════════════ */}
       <OnChainPerformance agentId={onChainId} />
 
-      {/* ── AI Performance (from backend) ───────────────────────────────── */}
-      <div>
-        <div className="flex items-center justify-between mb-3">
-          <SectionTitle>AI Performance</SectionTitle>
-          <div className="flex items-center gap-3">
-            {lastFetch && <span className="text-xs text-dim mono">Updated {lastFetch}</span>}
-            <ActionBtn onClick={fetchStats} loading={loading} variant="secondary">Refresh</ActionBtn>
+      {/* ════════════════════════════════════════════════════
+          AI PERFORMANCE
+      ════════════════════════════════════════════════════ */}
+      <section>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+          <div>
+            <span style={S.slabel}>AI Performance</span>
+            <h2 style={S.h2}>Portfolio Overview</h2>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {lastFetch && (
+              <span style={{ ...S.mono, fontSize: 10, color: "var(--dim)" }}>Updated {lastFetch}</span>
+            )}
+            <button
+              onClick={fetchStats}
+              disabled={loading}
+              style={{
+                display: "flex", alignItems: "center", gap: 6,
+                padding: "7px 14px", borderRadius: 10,
+                border: "1px solid var(--border)", background: "var(--card)",
+                color: "var(--dim)", cursor: loading ? "not-allowed" : "pointer",
+                fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 600,
+                opacity: loading ? 0.5 : 1,
+              }}
+            >
+              {loading ? "Loading…" : "↻ Refresh"}
+            </button>
           </div>
         </div>
 
         {loading && !stats ? (
-          <div className="flex justify-center py-8"><Spinner size={6} /></div>
+          <div style={{ display: "flex", justifyContent: "center", padding: "48px 0" }}>
+            <Spinner size={6} />
+          </div>
         ) : error ? (
-          <Card>
-            <p className="text-xs text-red mono">{error}</p>
-            <button onClick={fetchStats} className="text-xs text-dim hover:text-text mono mt-2 underline">
+          <ACard ac="var(--red)">
+            <p style={{ ...S.mono, fontSize: 12, color: "var(--red)", marginBottom: 8 }}>{error}</p>
+            <button
+              onClick={fetchStats}
+              style={{ ...S.mono, fontSize: 11, color: "var(--dim)", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}
+            >
               Retry
             </button>
-          </Card>
+          </ACard>
         ) : stats ? (
-          <>
-            {/* Circuit Breaker Banner */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+
+            {/* ── Circuit Breaker Banner ───────────────────── */}
             {stats.circuit_breaker_active && (
-              <div className="mb-4 px-4 py-3 rounded-lg border border-red/30 bg-red/10 flex items-center gap-3">
-                <span className="text-xl">⛔</span>
+              <div style={{
+                padding: "14px 18px",
+                borderRadius: 14,
+                border: "1px solid rgba(239,68,68,0.3)",
+                background: "rgba(239,68,68,0.08)",
+                display: "flex", alignItems: "center", gap: 12,
+              }}>
+                <span style={{ fontSize: 20 }}>⛔</span>
                 <div>
-                  <p className="text-sm mono font-semibold text-red">Circuit Breaker Active</p>
-                  <p className="text-xs mono text-dim">
+                  <p style={{ fontFamily: "'Syne', sans-serif", fontWeight: 800, fontSize: 14, color: "var(--red)", margin: 0 }}>
+                    Circuit Breaker Active
+                  </p>
+                  <p style={{ ...S.mono, fontSize: 10, color: "var(--dim)", marginTop: 3 }}>
                     Trading halted — drawdown exceeded 15% or daily loss &gt; 5%. Capital protection mode.
                   </p>
                 </div>
               </div>
             )}
 
-            {/* Core stats grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <StatBox label="Total Trades" value={stats.total_trades} />
-              <StatBox
+            {/* ── Core 4 stats ────────────────────────────── */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+              <Metric label="Total Trades" value={stats.total_trades} ac={acColors[0]} />
+              <Metric
                 label="Total PnL"
                 value={`$${fmt4(stats.total_pnl)}`}
-                color={stats.total_pnl >= 0 ? "text-green" : "text-red"}
+                color={stats.total_pnl >= 0 ? "var(--green)" : "var(--red)"}
                 sub={stats.total_pnl >= 0 ? "Profitable" : "In loss"}
+                ac={stats.total_pnl >= 0 ? "var(--green)" : "var(--red)"}
               />
-              <StatBox
+              <Metric
                 label="Win Rate"
                 value={`${stats.win_rate?.toFixed(1)}%`}
                 sub={`${stats.profitable_trades} of ${stats.total_trades} trades`}
+                ac={acColors[2]}
               />
-              <StatBox
-                label="Trust Score (AI)"
+              <Metric
+                label="AI Trust Score"
                 value={`${stats.trust_score?.toFixed(0)} / 100`}
-                color={
-                  stats.trust_score >= 70 ? "text-green" :
-                  stats.trust_score >= 40 ? "text-yellow" : "text-red"
-                }
+                color={stats.trust_score >= 70 ? "var(--green)" : stats.trust_score >= 40 ? "var(--yellow)" : "var(--red)"}
+                ac={stats.trust_score >= 70 ? "var(--green)" : "var(--accent)"}
               />
             </div>
 
-            {/* Risk-Adjusted Metrics */}
-            <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <Card>
-                <p className="text-xs text-dim mono">Sharpe Ratio</p>
-                <p className={`text-lg font-semibold mono mt-1 ${
-                  stats.sharpe_ratio == null ? "text-dim" :
-                  stats.sharpe_ratio >= 1    ? "text-green" :
-                  stats.sharpe_ratio >= 0    ? "text-yellow" : "text-red"
-                }`}>
-                  {stats.sharpe_ratio != null ? stats.sharpe_ratio.toFixed(3) : "—"}
-                </p>
-                <p className="text-xs text-dim mono mt-0.5">annualised (√252)</p>
-              </Card>
-
-              <Card>
-                <p className="text-xs text-dim mono">Max Drawdown</p>
-                <p className={`text-lg font-semibold mono mt-1 ${
-                  stats.max_drawdown_pct == null ? "text-dim" :
-                  stats.max_drawdown_pct > 15   ? "text-red" :
-                  stats.max_drawdown_pct > 8    ? "text-yellow" : "text-green"
-                }`}>
-                  {stats.max_drawdown_pct != null ? `${fmt2(stats.max_drawdown_pct)}%` : "—"}
-                </p>
-                <p className="text-xs text-dim mono mt-0.5">
-                  {stats.max_drawdown != null ? `$${fmt2(stats.max_drawdown)} peak→trough` : "No trades yet"}
-                </p>
-              </Card>
-
-              <Card>
-                <p className="text-xs text-dim mono">Vault Balance</p>
-                <p className={`text-lg font-semibold mono mt-1 ${
-                  stats.vault_balance >= stats.vault_initial ? "text-green" : "text-red"
-                }`}>
-                  ${stats.vault_balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </p>
-                <p className="text-xs text-dim mono mt-0.5">
-                  of ${stats.vault_initial.toLocaleString()} initial
-                </p>
-              </Card>
-
-              <Card>
-                <p className="text-xs text-dim mono">Daily Loss</p>
-                <p className={`text-lg font-semibold mono mt-1 ${
-                  stats.daily_loss_pct === 0 ? "text-green" :
-                  stats.daily_loss_pct > 5  ? "text-red" : "text-yellow"
-                }`}>
-                  {fmt2(stats.daily_loss_pct)}%
-                </p>
-                <p className="text-xs text-dim mono mt-0.5">${fmt2(stats.daily_loss_usd)} today</p>
-              </Card>
+            {/* ── Risk Adjusted Metrics ────────────────────── */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+              {[
+                {
+                  label: "Sharpe Ratio",
+                  value: stats.sharpe_ratio != null ? stats.sharpe_ratio.toFixed(3) : "—",
+                  sub: "Annualised (√252)",
+                  color: stats.sharpe_ratio == null ? "var(--dim)" : stats.sharpe_ratio >= 1 ? "var(--green)" : stats.sharpe_ratio >= 0 ? "var(--yellow)" : "var(--red)",
+                  ac: acColors[1],
+                },
+                {
+                  label: "Max Drawdown",
+                  value: stats.max_drawdown_pct != null ? `${fmt2(stats.max_drawdown_pct)}%` : "—",
+                  sub: stats.max_drawdown != null ? `$${fmt2(stats.max_drawdown)} peak→trough` : "No trades yet",
+                  color: stats.max_drawdown_pct == null ? "var(--dim)" : stats.max_drawdown_pct > 15 ? "var(--red)" : stats.max_drawdown_pct > 8 ? "var(--yellow)" : "var(--green)",
+                  ac: stats.max_drawdown_pct > 15 ? "var(--red)" : acColors[3],
+                },
+                {
+                  label: "Vault Balance",
+                  value: `$${stats.vault_balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                  sub: `of $${stats.vault_initial.toLocaleString()} initial`,
+                  color: stats.vault_balance >= stats.vault_initial ? "var(--green)" : "var(--red)",
+                  ac: acColors[2],
+                },
+                {
+                  label: "Daily Loss",
+                  value: `${fmt2(stats.daily_loss_pct)}%`,
+                  sub: `$${fmt2(stats.daily_loss_usd)} today`,
+                  color: stats.daily_loss_pct === 0 ? "var(--green)" : stats.daily_loss_pct > 5 ? "var(--red)" : "var(--yellow)",
+                  ac: stats.daily_loss_pct > 5 ? "var(--red)" : acColors[4],
+                },
+              ].map((m) => (
+                <Metric key={m.label} {...m} />
+              ))}
             </div>
 
-            {/* Drawdown Monitor */}
+            {/* ── Drawdown Monitor ─────────────────────────── */}
             {(stats.current_drawdown != null || stats.max_drawdown_pct != null) && (
-              <Card className="mt-4 space-y-3">
-                <p className="text-xs text-dim mono font-semibold mb-1">Drawdown Monitor</p>
-                {stats.current_drawdown != null && (
-                  <DrawdownBar pct={stats.current_drawdown} label="Current Drawdown" />
-                )}
-                {stats.max_drawdown_pct != null && (
-                  <DrawdownBar pct={stats.max_drawdown_pct} label="Max Drawdown (All-time)" />
-                )}
-                <DrawdownBar pct={stats.daily_loss_pct} label="Daily Loss Cap (5%)" />
-                <div className="flex gap-3 text-xs mono text-dim mt-2 flex-wrap">
-                  <span className="flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-green inline-block" /> &lt;8% normal
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-yellow inline-block" /> 8–15% reduced sizing
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-red inline-block" /> &gt;15% circuit breaker
-                  </span>
+              <ACard ac="var(--purple)">
+                <p style={{ ...S.metricLabel, marginBottom: 14 }}>Drawdown Monitor</p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {stats.current_drawdown != null && <DrawdownBar pct={stats.current_drawdown} label="Current Drawdown" />}
+                  {stats.max_drawdown_pct != null && <DrawdownBar pct={stats.max_drawdown_pct} label="Max Drawdown (All-time)" />}
+                  <DrawdownBar pct={stats.daily_loss_pct} label="Daily Loss Cap (5%)" />
                 </div>
-              </Card>
-            )}
-
-            {/* Equity Curve */}
-            {stats.equity_curve?.length > 0 && (
-              <div className="mt-4">
-                <SectionTitle>Equity Curve</SectionTitle>
-                <Card>
-                  <EquityCurve data={stats.equity_curve} />
-                </Card>
-              </div>
-            )}
-
-            {/* Risk Heatmap */}
-            {stats.risk_heatmap?.length > 0 && (
-              <div className="mt-6">
-                <SectionTitle>Risk Heatmap</SectionTitle>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  {stats.risk_heatmap.map((h) => (
-                    <Card key={h.token}>
-                      <div className="flex justify-between items-start mb-2">
-                        <span className="mono font-semibold text-sm">{h.token}</span>
-                        <Badge variant={h.risk_score > 60 ? "red" : h.risk_score > 30 ? "yellow" : "green"}>
-                          {h.risk_score.toFixed(0)} / 100
-                        </Badge>
-                      </div>
-                      <div className="text-xs mono space-y-0.5 mb-2">
-                        <p><span className="text-dim">Exposure:</span> ${fmt2(h.exposure_usd)}</p>
-                        <p><span className="text-dim">Volatility:</span> {fmt2(h.volatility)}%</p>
-                        <p>
-                          <span className="text-dim">Sentiment:</span>{" "}
-                          <span className={h.sentiment > 0.3 ? "text-green" : h.sentiment < -0.3 ? "text-red" : "text-text"}>
-                            {h.sentiment.toFixed(3)}
-                          </span>
-                        </p>
-                      </div>
-                      <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                        <div
-                          className={`h-full rounded-full transition-all ${
-                            h.risk_score > 60 ? "bg-red" : h.risk_score > 30 ? "bg-yellow" : "bg-green"
-                          }`}
-                          style={{ width: `${Math.min(h.risk_score, 100)}%` }}
-                        />
-                      </div>
-                    </Card>
+                <div style={{ display: "flex", gap: 16, marginTop: 14, flexWrap: "wrap" }}>
+                  {[
+                    { dot: "var(--green)",  label: "< 8% normal" },
+                    { dot: "var(--yellow)", label: "8–15% reduced sizing" },
+                    { dot: "var(--red)",    label: "> 15% circuit breaker" },
+                  ].map(({ dot, label }) => (
+                    <div key={label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <div style={{ width: 7, height: 7, borderRadius: "50%", background: dot, flexShrink: 0 }} />
+                      <span style={{ ...S.mono, fontSize: 10, color: "var(--dim)" }}>{label}</span>
+                    </div>
                   ))}
                 </div>
+              </ACard>
+            )}
+
+            {/* ── Equity Curve ─────────────────────────────── */}
+            {stats.equity_curve?.length > 0 && (
+              <div>
+                <p style={{ ...S.metricLabel, marginBottom: 10 }}>Equity Curve</p>
+                <ACard ac="linear-gradient(90deg, var(--accent), var(--accent2))">
+                  <EquityCurve data={stats.equity_curve} />
+                </ACard>
               </div>
             )}
 
-            {/* Trade Quality (AI scored) */}
+            {/* ── Risk Heatmap ─────────────────────────────── */}
+            {stats.risk_heatmap?.length > 0 && (
+              <div>
+                <p style={{ ...S.metricLabel, marginBottom: 10 }}>Risk Heatmap</p>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
+                  {stats.risk_heatmap.map((h) => {
+                    const riskColor = h.risk_score > 60 ? "var(--red)" : h.risk_score > 30 ? "var(--yellow)" : "var(--green)";
+                    return (
+                      <ACard key={h.token} ac={riskColor}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                          <p style={{ fontFamily: "'Syne', sans-serif", fontWeight: 800, fontSize: 15, color: "var(--text)" }}>
+                            {h.token}
+                          </p>
+                          <Tag variant={h.risk_score > 60 ? "red" : h.risk_score > 30 ? "yellow" : "green"}>
+                            {h.risk_score.toFixed(0)} / 100
+                          </Tag>
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 10 }}>
+                          {[
+                            ["Exposure",   `$${fmt2(h.exposure_usd)}`],
+                            ["Volatility", `${fmt2(h.volatility)}%`],
+                            ["Sentiment",  h.sentiment.toFixed(3)],
+                          ].map(([k, v]) => (
+                            <div key={k} style={{ display: "flex", justifyContent: "space-between" }}>
+                              <span style={{ ...S.mono, fontSize: 10, color: "var(--dim)" }}>{k}</span>
+                              <span style={{
+                                ...S.mono, fontSize: 10, fontWeight: 600,
+                                color: k === "Sentiment"
+                                  ? (h.sentiment > 0.3 ? "var(--green)" : h.sentiment < -0.3 ? "var(--red)" : "var(--text)")
+                                  : "var(--text)",
+                              }}>{v}</span>
+                            </div>
+                          ))}
+                        </div>
+                        <div style={{ height: 4, background: "var(--muted)", borderRadius: 99, overflow: "hidden" }}>
+                          <div style={{
+                            height: "100%", borderRadius: 99,
+                            width: `${Math.min(h.risk_score, 100)}%`,
+                            background: riskColor, transition: "width 0.6s ease",
+                          }} />
+                        </div>
+                      </ACard>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* ── Trade Quality ────────────────────────────── */}
             <QualityPanel account={account} />
 
-            {/* Recent Trades */}
+            {/* ── Recent Trades ────────────────────────────── */}
             {stats.recent_trades?.length > 0 ? (
-              <div className="mt-6">
-                <SectionTitle>Recent Trades</SectionTitle>
-                <Card>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-xs mono min-w-[700px]">
+              <div>
+                <p style={{ ...S.metricLabel, marginBottom: 10 }}>Recent Trades</p>
+                <ACard ac="var(--accent2)">
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 680 }}>
                       <thead>
-                        <tr className="text-dim border-b border-border">
-                          <th className="text-left pb-2 font-medium">Pair</th>
-                          <th className="text-left pb-2 font-medium">Action</th>
-                          <th className="text-left pb-2 font-medium">Amount</th>
-                          <th className="text-left pb-2 font-medium">Confidence</th>
-                          <th className="text-left pb-2 font-medium">PnL</th>
-                          <th className="text-left pb-2 font-medium">Pos%</th>
-                          <th className="text-left pb-2 font-medium">Risk</th>
-                          <th className="text-left pb-2 font-medium">Status</th>
+                        <tr>
+                          {["Pair","Action","Amount","Confidence","PnL","Pos%","Risk","Status"].map(h => (
+                            <th key={h} style={{
+                              textAlign: "left", paddingBottom: 10,
+                              ...S.metricLabel,
+                              borderBottom: "1px solid var(--border)",
+                              paddingRight: 12,
+                            }}>{h}</th>
+                          ))}
                         </tr>
                       </thead>
                       <tbody>
                         {stats.recent_trades.map((t) => (
-                          <tr key={t.id} className="border-b border-border/40 last:border-0 hover:bg-muted/10">
-                            <td className="py-2 text-text font-medium">{t.token_pair}</td>
-                            <td className="py-2">
-                              <Badge variant={actionColor(t.action)}>{t.action}</Badge>
+                          <tr key={t.id} style={{ borderBottom: "1px solid rgba(30,42,58,0.35)" }}>
+                            <td style={{ padding: "11px 12px 11px 0", fontFamily: "'Syne', sans-serif", fontSize: 13, fontWeight: 700, color: "var(--text)" }}>
+                              {t.token_pair}
                             </td>
-                            <td className="py-2 text-dim">${fmt2(t.amount_usd)}</td>
-                            <td className="py-2 text-dim">{t.confidence?.toFixed(0)}%</td>
-                            <td className={`py-2 font-medium ${(t.pnl ?? 0) >= 0 ? "text-green" : "text-red"}`}>
+                            <td style={{ padding: "11px 12px 11px 0" }}>
+                              <Tag variant={actionColor(t.action)}>{t.action}</Tag>
+                            </td>
+                            <td style={{ padding: "11px 12px 11px 0", ...S.mono, fontSize: 11, color: "var(--dim)" }}>
+                              ${fmt2(t.amount_usd)}
+                            </td>
+                            <td style={{ padding: "11px 12px 11px 0", ...S.mono, fontSize: 11, color: "var(--dim)" }}>
+                              {t.confidence?.toFixed(0)}%
+                            </td>
+                            <td style={{
+                              padding: "11px 12px 11px 0",
+                              ...S.mono, fontSize: 12, fontWeight: 700,
+                              color: (t.pnl ?? 0) >= 0 ? "var(--green)" : "var(--red)",
+                            }}>
                               {t.pnl != null ? `$${fmt4(t.pnl)}` : "—"}
                             </td>
-                            <td className="py-2 text-dim">
+                            <td style={{ padding: "11px 12px 11px 0", ...S.mono, fontSize: 11, color: "var(--dim)" }}>
                               {t.position_size_pct != null ? `${t.position_size_pct.toFixed(1)}%` : "—"}
                             </td>
-                            <td className="py-2">
-                              <Badge
-                                variant={
-                                  t.risk_level === "HIGH" ? "red" :
-                                  t.risk_level === "LOW"  ? "green" : "yellow"
-                                }
-                              >
+                            <td style={{ padding: "11px 12px 11px 0" }}>
+                              <Tag variant={t.risk_level === "HIGH" ? "red" : t.risk_level === "LOW" ? "green" : "yellow"}>
                                 {t.risk_level}
-                              </Badge>
+                              </Tag>
                             </td>
-                            <td className="py-2">
-                              <Badge
-                                variant={
-                                  t.status === "EXECUTED" ? "green" :
-                                  t.status === "REJECTED" ? "red" : "default"
-                                }
-                              >
+                            <td style={{ padding: "11px 0" }}>
+                              <Tag variant={t.status === "EXECUTED" ? "green" : t.status === "REJECTED" ? "red" : "default"}>
                                 {t.status}
-                              </Badge>
+                              </Tag>
                             </td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
-                </Card>
+                </ACard>
               </div>
             ) : (
-              <EmptyState message="No trades yet. Go to Trade page to execute your first trade." />
+              <div style={{
+                textAlign: "center", padding: "40px 0",
+                ...S.mono, fontSize: 12, color: "var(--dim)",
+              }}>
+                No trades yet. Go to Trade page to execute your first trade.
+              </div>
             )}
-          </>
-        ) : null}
-      </div>
 
-      {/* ── Failure Intelligence (AI backend) ───────────────────────────── */}
+          </div>
+        ) : null}
+      </section>
+
+      {/* ════════════════════════════════════════════════════
+          FAILURE INTELLIGENCE
+      ════════════════════════════════════════════════════ */}
       <FailurePanel account={account} />
 
     </div>

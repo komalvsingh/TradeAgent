@@ -111,7 +111,14 @@ export default function Navbar() {
             }}>⚠ Sepolia</button>
           )}
 
-          {/* Agent chip */}
+          {/* Agent chip
+              CHANGE: added agent.on_chain_id indicator.
+              Every other page (Dashboard, Trade, Voice) shows ⛓#N when the
+              agent has an on-chain registration — the Navbar chip now matches
+              that pattern. The on_chain_id is set by AgentContext once the
+              backend record is linked to the AgentRegistry NFT via register()
+              or linkChainId(). Showing it here gives a persistent status
+              indicator that the agent is fully on-chain without opening any page. */}
           {account && agent && (
             <div style={{
               display:"flex", alignItems:"center", gap:5,
@@ -122,6 +129,17 @@ export default function Navbar() {
               <span style={{ color:"var(--text)", fontWeight:600 }}>{agent.name}</span>
               <span style={{ color:"var(--border)" }}>·</span>
               <span style={{ color:"var(--accent)", fontWeight:600 }}>{agent.trust_score?.toFixed(0)}pts</span>
+              {/* CHANGE: show on-chain registration badge when agent.on_chain_id
+                  is present. Uses the same ⛓#N format as Dashboard/Trade/Voice.
+                  Styled in blue to match the on-chain badge colour used elsewhere. */}
+              {agent.on_chain_id != null && (
+                <>
+                  <span style={{ color:"var(--border)" }}>·</span>
+                  <span style={{ color:"#3B82F6", fontWeight:600 }}>
+                    ⛓#{agent.on_chain_id}
+                  </span>
+                </>
+              )}
             </div>
           )}
 

@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { useWallet } from "../context/WalletContext";
-import { useAgent } from "../context/AgentContext";
+import { useWallet }    from "../context/WalletContext";
+import { useAgent }     from "../context/AgentContext";
+import { useContracts } from "../context/ContractContext"; // CHANGE: added — needed for on-chain flow
 import { sendVoice, getDashboard, executeTrade } from "../utils/api";
 import {
   Card, SectionTitle, ActionBtn, Badge,
@@ -33,18 +34,16 @@ const SpeechRecognition =
 function useTTS() {
   const synthRef     = useRef(window.speechSynthesis);
   const utteranceRef = useRef(null);
-  const [speaking,   setSpeaking]  = useState(false);
-  const [ttsEnabled, setTtsEnabled] = useState(true);  // user can toggle off
-  const [ttsVoice,   setTtsVoice]  = useState(null);   // preferred voice
-  const [voices,     setVoices]    = useState([]);
+  const [speaking,   setSpeaking]   = useState(false);
+  const [ttsEnabled, setTtsEnabled] = useState(true);
+  const [ttsVoice,   setTtsVoice]   = useState(null);
+  const [voices,     setVoices]     = useState([]);
 
-  // Load available voices (async in Chrome)
   useEffect(() => {
     const loadVoices = () => {
       const v = synthRef.current.getVoices();
       if (v.length > 0) {
         setVoices(v);
-        // Prefer a clear English voice — Google US English if available
         const preferred =
           v.find((x) => x.name === "Google US English") ||
           v.find((x) => x.lang === "en-US" && !x.localService) ||
@@ -60,29 +59,22 @@ function useTTS() {
 
   const speak = useCallback((text) => {
     if (!ttsEnabled || !text) return;
-
-    // Cancel any current speech
     synthRef.current.cancel();
-
-    // Strip markdown-style symbols that sound weird when spoken
     const clean = text
       .replace(/[$]/g, " dollars ")
       .replace(/[%]/g, " percent ")
       .replace(/[_\-*#]/g, " ")
       .replace(/\s{2,}/g, " ")
       .trim();
-
     const utt    = new SpeechSynthesisUtterance(clean);
     utt.voice    = ttsVoice;
     utt.lang     = "en-US";
-    utt.rate     = 1.0;   // natural pace
+    utt.rate     = 1.0;
     utt.pitch    = 1.0;
     utt.volume   = 1.0;
-
     utt.onstart  = () => setSpeaking(true);
     utt.onend    = () => setSpeaking(false);
     utt.onerror  = () => setSpeaking(false);
-
     utteranceRef.current = utt;
     synthRef.current.speak(utt);
   }, [ttsEnabled, ttsVoice]);
@@ -101,31 +93,65 @@ export default function Voice() {
   const { account, signer }  = useWallet();
   const { agent, refetch }   = useAgent();
 
+  // CHANGE: destructure on-chain helpers from ContractContext.
+  // - submitTradeIntent: signs EIP-712 struct + submits to RiskRouter (same as Trade.jsx).
+  // - storeValidation:   stores audit record on ValidationRegistry after execution.
+  // - getAgentNonce:     read current nonce before building the intent.
+  // - getAgentDailyStats: shows real on-chain daily loss in the stats strip now that
+  //   the fixed RiskRouter actually increments totalLossUsd.
+  const {
+    submitTradeIntent,
+    storeValidation,
+    getAgentNonce,
+    getAgentDailyStats,
+  } = useContracts();
+
   const {
     speak, stop, speaking,
     ttsEnabled, setTtsEnabled,
     voices, ttsVoice, setTtsVoice,
   } = useTTS();
 
-  const [input,       setInput]       = useState("");
-  const [response,    setResponse]    = useState(null);
-  const [tradeResult, setTradeResult] = useState(null);
-  const [loading,     setLoading]     = useState(false);
-  const [executing,   setExecuting]   = useState(false);
-  const [listening,   setListening]   = useState(false);
-  const [sigStatus,   setSigStatus]   = useState(null);
-  const [error,       setError]       = useState(null);
-  const [history,     setHistory]     = useState([]);
-  const [stats,       setStats]       = useState(null);
+  const [input,        setInput]        = useState("");
+  const [response,     setResponse]     = useState(null);
+  const [tradeResult,  setTradeResult]  = useState(null);
+  const [loading,      setLoading]      = useState(false);
+  const [executing,    setExecuting]    = useState(false);
+  const [listening,    setListening]    = useState(false);
+  const [error,        setError]        = useState(null);
+  const [history,      setHistory]      = useState([]);
+  const [stats,        setStats]        = useState(null);
+
+  // CHANGE: replaced single sigStatus string with a richer chainStep object so
+  // the UI can reflect each stage of the on-chain flow independently —
+  // matching the step-bar pattern from Trade.jsx.
+  // Values per key: null | "pending" | "done" | "error"
+  const [chainStep, setChainStep] = useState({
+    sig:        null,  // MetaMask plain-text approval (kept for Voice UX)
+    riskrouter: null,  // submitTradeIntent on-chain TX
+    validation: null,  // storeValidation on-chain TX
+  });
+
+  // CHANGE: on-chain daily stats for the stats strip
+  const [onChainDaily, setOnChainDaily] = useState(null);
 
   const inputRef = useRef(null);
   const recogRef = useRef(null);
 
-  // Load live stats
+  // Load live stats + on-chain daily stats
   useEffect(() => {
     if (!account || !agent) return;
     getDashboard(account).then(setStats).catch(() => {});
-  }, [account, agent]);
+
+    // CHANGE: fetch on-chain daily stats if agent has an on-chain ID.
+    // getAgentDailyStats returns { date, totalLossUsd (cents), tradeCount }.
+    // totalLossUsd is now real because the fixed RiskRouter increments it.
+    if (agent.on_chain_id && getAgentDailyStats) {
+      getAgentDailyStats(Number(agent.on_chain_id))
+        .then(setOnChainDaily)
+        .catch(() => {});
+    }
+  }, [account, agent, getAgentDailyStats]);
 
   if (!account) return <ConnectPrompt />;
   if (!agent)   return (
@@ -134,17 +160,31 @@ export default function Voice() {
     </div>
   );
 
+  // ── Helper to update a single chain step ──────────────────────────────────
+  const setStep = (key, status) =>
+    setChainStep((prev) => ({ ...prev, [key]: status }));
+
+  // ── Reset flow state ──────────────────────────────────────────────────────
+  const resetFlow = () => {
+    setError(null);
+    setTradeResult(null);
+    setChainStep({ sig: null, riskrouter: null, validation: null });
+  };
+
   // ── Send command ───────────────────────────────────────────────────────────
-  const send = async (text) => {
+  // CHANGE: wrapped in useCallback so toggleMic (which calls send) can safely
+  // list it as a dependency without the eslint exhaustive-deps warning caused
+  // by the original inline function definition.
+  const send = useCallback(async (text) => {
     const cmd = (text || input).trim();
     if (!cmd) return;
 
-    stop(); // cancel any ongoing speech
+    stop();
     setLoading(true);
     setError(null);
     setResponse(null);
     setTradeResult(null);
-    setSigStatus(null);
+    resetFlow();
 
     try {
       const r = await sendVoice({ text: cmd, wallet_address: account });
@@ -155,10 +195,7 @@ export default function Voice() {
       ]);
       setInput("");
 
-      // ✅ Auto-speak the AI response
-      if (r.explanation) {
-        speak(r.explanation);
-      }
+      if (r.explanation) speak(r.explanation);
 
       if (r.intent === "settings") {
         await refetch();
@@ -173,52 +210,139 @@ export default function Voice() {
       setLoading(false);
       inputRef.current?.focus();
     }
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [input, account, stop, speak, refetch]);
 
   // ── Execute voice trade ───────────────────────────────────────────────────
+  //
+  // CHANGE: Now runs the same full on-chain flow as Trade.jsx handleExecute
+  // when agent.on_chain_id is present:
+  //
+  //   1. MetaMask signMessage (soft approval — kept for Voice UX, free/no gas)
+  //   2. submitTradeIntent() → EIP-712 sign + RiskRouter TX  (new)
+  //   3. executeTrade() on backend with on-chain proof fields  (updated payload)
+  //   4. storeValidation() → ValidationRegistry audit record  (new)
+  //
+  // If agent has no on_chain_id, steps 2 and 4 are skipped gracefully —
+  // the trade executes via backend only, same as before.
+  //
   const executeVoiceTrade = async () => {
     if (!response?.decision) return;
     setExecuting(true);
-    setError(null);
-    setTradeResult(null);
-    setSigStatus(null);
+    resetFlow();
     stop();
 
+    const agentOnChainId = agent.on_chain_id ? Number(agent.on_chain_id) : null;
+    const token    = response.token || "ethereum";
+    const strategy = agent.strategy;
+
+    // ── Step 1: MetaMask soft approval (plain text) ─────────────────────────
+    // Kept as-is for Voice UX — user hears the prompt, sees the summary.
+    // This is NOT the EIP-712 signing; that happens inside submitTradeIntent.
+    setStep("sig", "pending");
+    speak("Please approve the trade in your MetaMask wallet.");
+
     try {
-      const token    = response.token || "ethereum";
-      const strategy = agent.strategy;
+      const message = [
+        "═══ Voice AI Trade Approval ═══",
+        `Command   : "${history[0]?.cmd || ""}"`,
+        `Action    : ${response.decision.action}`,
+        `Token     : ${token.toUpperCase()}`,
+        `Amount    : $${response.decision.amount_usd}`,
+        `Confidence: ${response.decision.confidence}%`,
+        `Wallet    : ${account}`,
+        `Time      : ${new Date().toISOString()}`,
+        "────────────────────────────────",
+        "Signing approves this AI trade. No ETH spent.",
+      ].join("\n");
+      await signer.signMessage(message);
+      setStep("sig", "done");
+      speak("Signature confirmed. Executing trade now.");
+    } catch {
+      setStep("sig", "error");
+      setError("Trade cancelled — MetaMask signature rejected.");
+      speak("Trade cancelled. MetaMask signature was rejected.");
+      setExecuting(false);
+      return;
+    }
 
-      setSigStatus("waiting");
-      speak("Please approve the trade in your MetaMask wallet.");
+    // ── Step 2: EIP-712 sign + RiskRouter on-chain TX ───────────────────────
+    // CHANGE: Added — mirrors Trade.jsx handleExecute steps 2a/2b.
+    // Only runs when agent has an on-chain registration.
+    let tradeHash       = null;
+    let onChainApproved = false;
+    let nonce           = null;
 
+    if (agentOnChainId != null && submitTradeIntent) {
+      setStep("riskrouter", "pending");
       try {
-        const message = [
-          "═══ Voice AI Trade Approval ═══",
-          `Command   : "${history[0]?.cmd || ""}"`,
-          `Action    : ${response.decision.action}`,
-          `Token     : ${token.toUpperCase()}`,
-          `Amount    : $${response.decision.amount_usd}`,
-          `Confidence: ${response.decision.confidence}%`,
-          `Wallet    : ${account}`,
-          `Time      : ${new Date().toISOString()}`,
-          "────────────────────────────────",
-          "Signing approves this AI trade. No ETH spent.",
-        ].join("\n");
-        await signer.signMessage(message);
-        setSigStatus("signed");
-        speak("Signature confirmed. Executing trade now.");
-      } catch {
-        setSigStatus("rejected");
-        setError("Trade cancelled — MetaMask signature rejected.");
-        speak("Trade cancelled. MetaMask signature was rejected.");
-        setExecuting(false);
-        return;
+        // Convert amount_usd (dollars) to integer cents for the contract.
+        const amountUsdCents = Math.round((response.decision.amount_usd || 0) * 100);
+        nonce = await getAgentNonce(agentOnChainId);
+
+        // submitTradeIntent internally: builds EIP-712 struct, opens MetaMask
+        // for typed-data signing (no gas), then submits on-chain TX (gas required).
+        speak("Approve the RiskRouter transaction in MetaMask.");
+        const intentResult = await submitTradeIntent({
+          agentId:    agentOnChainId,
+          tokenPair:  response.decision.token_pair || `${token.toUpperCase()}/USDC`,
+          action:     response.decision.action,
+          amountUsd:  amountUsdCents,
+          confidence: Math.round(response.decision.confidence || 0),
+          reason:     response.decision.reason || response.explanation || "",
+        });
+
+        tradeHash       = intentResult.tradeHash;
+        onChainApproved = intentResult.approved;
+
+        if (intentResult.rejected) {
+          setStep("riskrouter", "error");
+          setError(`RiskRouter rejected: ${intentResult.reason || "risk limit exceeded"}`);
+          speak(`Trade rejected by risk router. ${intentResult.reason || "Risk limit exceeded."}`);
+          setExecuting(false);
+          return;
+        }
+
+        setStep("riskrouter", "done");
+        speak("Risk check passed.");
+
+      } catch (chainErr) {
+        if (
+          chainErr.code === 4001 ||
+          chainErr.message?.includes("user rejected") ||
+          chainErr.message?.includes("User denied")
+        ) {
+          setStep("riskrouter", "error");
+          setError("Trade cancelled — RiskRouter transaction rejected.");
+          speak("Trade cancelled. MetaMask transaction was rejected.");
+          setExecuting(false);
+          return;
+        }
+        // Non-rejection chain error: log and continue with backend execution.
+        console.warn("RiskRouter step failed, falling back to backend:", chainErr.message);
+        setStep("riskrouter", "error");
       }
 
-      const result = await executeTrade({ token, strategy, wallet_address: account });
+    } else {
+      // No on-chain ID — skip chain steps gracefully.
+      setStep("riskrouter", "done");
+    }
+
+    // ── Step 3: Backend execution ───────────────────────────────────────────
+    // CHANGE: payload now includes the on-chain proof fields so the backend
+    // can link the DB trade record to the on-chain TX — same as Trade.jsx.
+    try {
+      const result = await executeTrade({
+        token,
+        strategy,
+        wallet_address:      account,
+        on_chain_trade_hash: tradeHash        || undefined,
+        on_chain_approved:   onChainApproved,
+        on_chain_nonce:      nonce            ?? undefined,
+        agent_on_chain_id:   agentOnChainId   ?? undefined,
+      });
       setTradeResult(result);
 
-      // Speak the result
       const pnlStr = result.pnl != null
         ? `PnL is ${result.pnl >= 0 ? "positive" : "negative"} ${Math.abs(result.pnl).toFixed(4)} dollars.`
         : "";
@@ -228,8 +352,38 @@ export default function Voice() {
         `${pnlStr}`
       );
 
+      // ── Step 4: ValidationRegistry audit record ─────────────────────────
+      // CHANGE: Added — mirrors Trade.jsx step 4.
+      // storeValidation (5 user-facing args) handles timestamp + personal_sign
+      // internally. Non-fatal if it fails — trade already executed.
+      if (agentOnChainId != null && storeValidation && result.id) {
+        setStep("validation", "pending");
+        try {
+          await storeValidation(
+            agentOnChainId,
+            result.id,
+            result.reason || response.explanation || "",
+            Math.round(result.confidence || response.decision.confidence || 0),
+            result.risk_check || "passed",
+          );
+          setStep("validation", "done");
+        } catch (valErr) {
+          console.warn("Validation store failed:", valErr.message);
+          setStep("validation", "error");
+        }
+      } else {
+        setStep("validation", "done");
+      }
+
+      // Refresh dashboard stats + on-chain daily stats after trade
       const s = await getDashboard(account).catch(() => null);
       if (s) setStats(s);
+
+      // CHANGE: refresh on-chain daily stats so the strip shows updated loss
+      if (agentOnChainId != null && getAgentDailyStats) {
+        getAgentDailyStats(agentOnChainId).then(setOnChainDaily).catch(() => {});
+      }
+
       await refetch();
 
     } catch (e) {
@@ -242,6 +396,7 @@ export default function Voice() {
   };
 
   // ── Microphone ────────────────────────────────────────────────────────────
+  // CHANGE: send is now a stable useCallback ref, so it's safe in this dep array.
   const toggleMic = useCallback(() => {
     if (!SpeechRecognition) {
       setError("Your browser doesn't support voice input. Try Chrome.");
@@ -253,9 +408,9 @@ export default function Voice() {
       return;
     }
 
-    const recog          = new SpeechRecognition();
-    recog.lang           = "en-US";
-    recog.interimResults = false;
+    const recog           = new SpeechRecognition();
+    recog.lang            = "en-US";
+    recog.interimResults  = false;
     recog.maxAlternatives = 1;
 
     recog.onresult = (e) => {
@@ -278,11 +433,18 @@ export default function Voice() {
     setError(null);
   }, [listening, send]);
 
+  // Derive simple sig status for the MetaMask waiting card (kept for Voice UX)
+  const sigWaiting = chainStep.sig === "pending";
+  const sigSigned  = chainStep.sig === "done";
+
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="max-w-3xl mx-auto px-4 py-8 space-y-6">
 
       {/* Live agent stats strip */}
+      {/* CHANGE: added on-chain daily loss column when getAgentDailyStats data
+          is available. totalLossUsd comes in cents — divide by 100 for dollars.
+          This was always zero before the RiskRouter fix; now it's real. */}
       <Card className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <span className="mono text-sm font-semibold">{agent.name}</span>
@@ -293,9 +455,12 @@ export default function Voice() {
           }>
             {agent.risk_tolerance}
           </Badge>
+          {agent.on_chain_id && (
+            <Badge variant="blue">⛓#{agent.on_chain_id}</Badge>
+          )}
         </div>
         {stats ? (
-          <div className="flex gap-4 text-xs mono">
+          <div className="flex gap-4 text-xs mono flex-wrap">
             <span>
               <span className="text-dim">PnL: </span>
               <span className={stats.total_pnl >= 0 ? "text-green" : "text-red"}>
@@ -316,6 +481,16 @@ export default function Voice() {
               <span className="text-dim">Win Rate: </span>
               <span className="text-text">{stats.win_rate?.toFixed(1)}%</span>
             </span>
+            {/* CHANGE: on-chain daily loss from fixed RiskRouter */}
+            {onChainDaily && (
+              <span>
+                <span className="text-dim">Chain Loss Today: </span>
+                <span className={onChainDaily.totalLossUsd / 100 > 500 ? "text-red" :
+                                 onChainDaily.totalLossUsd / 100 > 100 ? "text-yellow" : "text-green"}>
+                  ${(onChainDaily.totalLossUsd / 100).toFixed(2)}
+                </span>
+              </span>
+            )}
           </div>
         ) : (
           <Spinner size={3} />
@@ -336,7 +511,6 @@ export default function Voice() {
             className="flex-1 bg-bg border border-border rounded px-3 py-2 text-sm mono text-text placeholder:text-dim focus:outline-none focus:border-muted"
           />
 
-          {/* Mic button */}
           <button
             onClick={toggleMic}
             disabled={loading || executing}
@@ -355,9 +529,8 @@ export default function Voice() {
           </ActionBtn>
         </div>
 
-        {/* TTS controls row */}
+        {/* TTS controls */}
         <div className="flex items-center gap-3 mt-3 flex-wrap">
-          {/* TTS toggle */}
           <button
             onClick={() => { setTtsEnabled((v) => !v); if (speaking) stop(); }}
             className={`text-xs mono px-2 py-1 rounded border transition-colors ${
@@ -370,7 +543,6 @@ export default function Voice() {
             {ttsEnabled ? "🔊 Voice On" : "🔇 Voice Off"}
           </button>
 
-          {/* Stop speaking */}
           {speaking && (
             <button
               onClick={stop}
@@ -380,7 +552,6 @@ export default function Voice() {
             </button>
           )}
 
-          {/* Speaking indicator */}
           {speaking && (
             <span className="text-xs mono text-green flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-green inline-block pulse" />
@@ -388,7 +559,6 @@ export default function Voice() {
             </span>
           )}
 
-          {/* Voice selector (if multiple voices available) */}
           {voices.length > 1 && ttsEnabled && (
             <select
               value={ttsVoice?.name || ""}
@@ -417,7 +587,7 @@ export default function Voice() {
           </p>
         )}
 
-        {/* Quick example buttons */}
+        {/* Quick examples */}
         <div className="flex flex-wrap gap-1.5 mt-3">
           {EXAMPLES.map((ex) => (
             <button
@@ -442,8 +612,47 @@ export default function Voice() {
         </div>
       )}
 
-      {/* MetaMask waiting */}
-      {sigStatus === "waiting" && (
+      {/* CHANGE: Execution pipeline status — replaces the single sigStatus card.
+          Shows each on-chain step independently so the user knows exactly where
+          in the flow they are. Only visible once execution starts. */}
+      {executing && (
+        <Card>
+          <p className="text-xs text-dim mono font-semibold mb-3">Execution Pipeline</p>
+          <div className="space-y-2">
+            {[
+              { key: "sig",        label: "MetaMask Approval",       hint: "Sign to confirm intent — no gas required" },
+              { key: "riskrouter", label: "RiskRouter On-Chain TX",  hint: "EIP-712 sign + submit trade — gas required" },
+              { key: "validation", label: "Validation Record",       hint: "Store audit proof on-chain — gas required" },
+            ].map(({ key, label, hint }) => {
+              const st = chainStep[key];
+              const dot =
+                st === "done"    ? "bg-green" :
+                st === "error"   ? "bg-red"   :
+                st === "pending" ? "bg-yellow animate-pulse" :
+                                   "bg-muted";
+              const text =
+                st === "done"    ? "text-green"  :
+                st === "error"   ? "text-red"    :
+                st === "pending" ? "text-yellow" :
+                                   "text-dim";
+              return (
+                <div key={key} className="flex items-center gap-3">
+                  <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${dot} transition-all`} />
+                  <div>
+                    <p className={`text-xs mono ${text}`}>{label}</p>
+                    {st === "pending" && (
+                      <p className="text-[10px] mono text-dim">{hint}</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {/* MetaMask waiting card — kept for audio feedback continuity */}
+      {sigWaiting && (
         <Card className="flex items-center gap-4 border-yellow/20">
           <div className="w-8 h-8 rounded-full bg-yellow/10 flex items-center justify-center text-lg flex-shrink-0">
             🦊
@@ -470,9 +679,12 @@ export default function Voice() {
                 {response.token.replace(/-/g, " ")}
               </span>
             )}
-            {sigStatus === "signed" && <Badge variant="green">MetaMask ✓</Badge>}
+            {sigSigned && <Badge variant="green">MetaMask ✓</Badge>}
+            {/* CHANGE: show RiskRouter approval badge once done */}
+            {chainStep.riskrouter === "done" && agent.on_chain_id && (
+              <Badge variant="green">⛓ RiskRouter ✓</Badge>
+            )}
 
-            {/* Re-speak button */}
             <button
               onClick={() => speak(response.explanation)}
               disabled={speaking}
@@ -485,7 +697,6 @@ export default function Voice() {
 
           <p className="text-sm text-text leading-relaxed mb-3">{response.explanation}</p>
 
-          {/* AI Decision detail cards */}
           {response.decision && (
             <div className="bg-bg border border-border rounded p-3 space-y-2">
               <p className="text-xs text-dim mono font-semibold">AI Analysis</p>
@@ -517,7 +728,6 @@ export default function Voice() {
                 ))}
               </div>
 
-              {/* Indicator grid — RSI, MA7, MA25, Sentiment, 24h Change */}
               {response.decision.indicators && (
                 <div className="grid grid-cols-3 sm:grid-cols-5 gap-1 text-xs mono mt-1">
                   {[
@@ -562,7 +772,6 @@ export default function Voice() {
                 </div>
               )}
 
-              {/* Signals breakdown */}
               {response.decision.indicators?.signals &&
                 Object.keys(response.decision.indicators.signals).length > 0 && (
                 <div className="pt-2 border-t border-border mt-1">
@@ -577,7 +786,6 @@ export default function Voice() {
                 </div>
               )}
 
-              {/* Execute button — only for non-HOLD trade intents */}
               {response.intent === "trade" && response.decision.action !== "HOLD" && (
                 <div className="pt-2 border-t border-border mt-2">
                   <ActionBtn
@@ -591,6 +799,7 @@ export default function Voice() {
                   <p className="text-xs text-dim mono mt-1">
                     {response.decision.action} {response.token?.toUpperCase()} ·
                     ${response.decision.amount_usd} · Requires MetaMask signature
+                    {agent.on_chain_id && " + RiskRouter TX"}
                   </p>
                 </div>
               )}
@@ -599,7 +808,7 @@ export default function Voice() {
         </Card>
       )}
 
-      {executing && !sigStatus && (
+      {executing && chainStep.sig === null && (
         <div className="flex justify-center py-6"><Spinner size={6} /></div>
       )}
 
@@ -634,23 +843,37 @@ export default function Voice() {
               </div>
             ))}
           </div>
-          {tradeResult.on_chain_id && (
-            <div className="mt-2 flex items-center gap-2 flex-wrap">
+
+          {/* CHANGE: RiskRouter on-chain badge + validation badge */}
+          <div className="mt-2 flex items-center gap-2 flex-wrap">
+            {tradeResult.on_chain_id && (
+              <>
+                <span className="text-xs mono px-1.5 py-0.5 rounded bg-green/10 text-green border border-green/20">
+                  ⛓ RiskRouter Approved
+                </span>
+                <a
+                  href={`https://sepolia.etherscan.io/tx/${tradeResult.on_chain_id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-blue hover:underline mono"
+                >
+                  {tradeResult.on_chain_id.startsWith("0x")
+                    ? `${tradeResult.on_chain_id.slice(0, 22)}…`
+                    : tradeResult.on_chain_id}
+                </a>
+              </>
+            )}
+            {chainStep.validation === "done" && agent.on_chain_id && (
               <span className="text-xs mono px-1.5 py-0.5 rounded bg-green/10 text-green border border-green/20">
-                ⛓ RiskRouter Approved
+                📋 Validation stored on-chain
               </span>
-              <a
-                href={`https://sepolia.etherscan.io/tx/${tradeResult.on_chain_id}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-blue hover:underline mono"
-              >
-                {tradeResult.on_chain_id.startsWith("0x")
-                  ? `${tradeResult.on_chain_id.slice(0, 22)}…`
-                  : tradeResult.on_chain_id}
-              </a>
-            </div>
-          )}
+            )}
+            {chainStep.validation === "error" && (
+              <span className="text-xs mono px-1.5 py-0.5 rounded bg-yellow/10 text-yellow border border-yellow/20">
+                ⚠ Validation store failed (trade executed successfully)
+              </span>
+            )}
+          </div>
         </Card>
       )}
 

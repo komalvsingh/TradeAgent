@@ -1,5 +1,7 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { useWallet } from "../context/WalletContext";
+import { useWallet }    from "../context/WalletContext";
+import { useAgent }     from "../context/AgentContext";     // CHANGE: added
+import { useContracts } from "../context/ContractContext"; // CHANGE: added
 import { getHistory, replayTrade } from "../utils/api";
 import {
   Card, SectionTitle, Badge, ActionBtn,
@@ -12,10 +14,17 @@ function actionColor(a) {
   return "default";
 }
 
-function ReplayModal({ tradeId, onClose }) {
-  const [data,    setData]    = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState(null);
+// ── Replay + Validation Modal ─────────────────────────────────────────────────
+// CHANGE: ReplayModal now accepts verifyValidationArtifact from the parent so
+// users can trigger an on-chain proof check for any trade that has a stored
+// ValidationRegistry artifact. The verify call is lazy (button-triggered) to
+// avoid N RPC calls when the modal opens — it only hits the chain on demand.
+function ReplayModal({ tradeId, onClose, verifyValidationArtifact }) {
+  const [data,        setData]        = useState(null);
+  const [loading,     setLoading]     = useState(true);
+  const [error,       setError]       = useState(null);
+  // CHANGE: per-trade validation proof state
+  const [proofStatus, setProofStatus] = useState(null); // null | "checking" | "verified" | "invalid" | "not_found"
 
   useEffect(() => {
     replayTrade(tradeId)
@@ -23,6 +32,28 @@ function ReplayModal({ tradeId, onClose }) {
       .catch((e) => setError(e.response?.data?.detail || e.message))
       .finally(() => setLoading(false));
   }, [tradeId]);
+
+  // CHANGE: on-demand proof verification via ValidationRegistry.
+  // verifyValidationArtifact(tradeId) is a view call — no gas, no MetaMask popup.
+  // Returns true if the stored artifact hash matches the recomputed hash AND
+  // the validator signature is still valid. Returns false if tampered or missing.
+  const handleVerify = async () => {
+    if (!verifyValidationArtifact) return;
+    setProofStatus("checking");
+    try {
+      const verified = await verifyValidationArtifact(tradeId);
+      setProofStatus(verified ? "verified" : "invalid");
+    } catch (e) {
+      // Contract reverts with "trade not found" if no artifact was stored
+      const msg = e.message?.toLowerCase() || "";
+      if (msg.includes("trade not found") || msg.includes("not found")) {
+        setProofStatus("not_found");
+      } else {
+        setProofStatus("invalid");
+        console.warn("Artifact verification error:", e.message);
+      }
+    }
+  };
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -84,12 +115,12 @@ function ReplayModal({ tradeId, onClose }) {
                 <p className="text-xs text-dim mono font-semibold mb-2">Trade Summary</p>
                 <div className="grid grid-cols-2 gap-1.5 text-xs mono">
                   {[
-                    { label: "Action",    val: data.summary.action },
-                    { label: "Amount",    val: `$${data.summary.amount_usd}` },
-                    { label: "PnL",       val: data.summary.pnl != null ? `$${data.summary.pnl?.toFixed(4)}` : "—" },
-                    { label: "Risk",      val: data.summary.risk_level },
-                    { label: "Confidence",val: `${data.summary.confidence}%` },
-                    { label: "Status",    val: data.summary.status },
+                    { label: "Action",     val: data.summary.action },
+                    { label: "Amount",     val: `$${data.summary.amount_usd}` },
+                    { label: "PnL",        val: data.summary.pnl != null ? `$${data.summary.pnl?.toFixed(4)}` : "—" },
+                    { label: "Risk",       val: data.summary.risk_level },
+                    { label: "Confidence", val: `${data.summary.confidence}%` },
+                    { label: "Status",     val: data.summary.status },
                   ].map(({ label, val }) => (
                     <div key={label} className="bg-bg border border-border rounded p-1.5">
                       <span className="text-dim">{label}: </span>
@@ -99,6 +130,67 @@ function ReplayModal({ tradeId, onClose }) {
                 </div>
               </div>
             )}
+
+            {/* CHANGE: On-chain artifact verification section.
+                Only shown when verifyValidationArtifact is available (i.e. the
+                ValidationRegistry contract is connected). The call is a pure
+                view — no MetaMask, no gas. It recomputes the artifact hash from
+                stored fields and checks the validator signature, returning true
+                only if both match exactly. */}
+            {verifyValidationArtifact && (
+              <div className="mt-4 pt-4 border-t border-border">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs text-dim mono font-semibold">On-Chain Proof</p>
+                  {proofStatus === null && (
+                    <button
+                      onClick={handleVerify}
+                      className="text-xs mono px-2 py-1 rounded border border-border text-dim hover:text-text hover:border-muted transition-colors"
+                    >
+                      Verify Artifact
+                    </button>
+                  )}
+                  {proofStatus === "checking" && (
+                    <span className="flex items-center gap-1.5 text-xs mono text-yellow">
+                      <Spinner size={3} /> Checking chain...
+                    </span>
+                  )}
+                </div>
+
+                {proofStatus === "verified" && (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded border border-green/20 bg-green/5">
+                    <span className="text-green text-sm">✓</span>
+                    <div>
+                      <p className="text-xs mono text-green font-medium">Artifact Verified</p>
+                      <p className="text-[10px] mono text-dim mt-0.5">
+                        Hash matches · Validator signature valid · ValidationRegistry confirmed
+                      </p>
+                    </div>
+                  </div>
+                )}
+                {proofStatus === "invalid" && (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded border border-red/20 bg-red/5">
+                    <span className="text-red text-sm">✕</span>
+                    <div>
+                      <p className="text-xs mono text-red font-medium">Artifact Invalid</p>
+                      <p className="text-[10px] mono text-dim mt-0.5">
+                        Hash mismatch or signature invalid — artifact may have been tampered with
+                      </p>
+                    </div>
+                  </div>
+                )}
+                {proofStatus === "not_found" && (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded border border-border bg-muted/5">
+                    <span className="text-dim text-sm">—</span>
+                    <div>
+                      <p className="text-xs mono text-dim font-medium">No Artifact Found</p>
+                      <p className="text-[10px] mono text-dim mt-0.5">
+                        This trade was executed before on-chain validation was enabled
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         ) : null}
       </Card>
@@ -106,13 +198,26 @@ function ReplayModal({ tradeId, onClose }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function History() {
-  const { account }              = useWallet();
-  const [trades,    setTrades]   = useState([]);
-  const [loading,   setLoading]  = useState(false);
-  const [error,     setError]    = useState(null);
-  const [replayId,  setReplayId] = useState(null);
-  const [lastFetch, setLastFetch]= useState(null);
+  const { account }   = useWallet();
+  // CHANGE: useAgent for agent.on_chain_id — needed to call getAgentTradeCount
+  const { agent }     = useAgent();
+  // CHANGE: useContracts for on-chain data — getAgentTradeCount and
+  // verifyValidationArtifact (passed into ReplayModal).
+  const {
+    getAgentTradeCount,
+    verifyValidationArtifact,
+  } = useContracts();
+
+  const [trades,         setTrades]         = useState([]);
+  const [loading,        setLoading]        = useState(false);
+  const [error,          setError]          = useState(null);
+  const [replayId,       setReplayId]       = useState(null);
+  const [lastFetch,      setLastFetch]      = useState(null);
+  // CHANGE: on-chain settled trade count from ValidationRegistry
+  const [onChainCount,   setOnChainCount]   = useState(null);
 
   const fetchHistory = useCallback(async () => {
     if (!account) return;
@@ -130,6 +235,18 @@ export default function History() {
   }, [account]);
 
   useEffect(() => { fetchHistory(); }, [fetchHistory]);
+
+  // CHANGE: fetch on-chain trade count from ValidationRegistry once the agent
+  // and contract are available. This is how many trades have a stored
+  // validation artifact on-chain — may differ from the backend count if some
+  // trades ran before on-chain validation was enabled, or if storeValidation
+  // failed for a trade. Non-fatal if the contract isn't connected.
+  useEffect(() => {
+    if (!agent?.on_chain_id || !getAgentTradeCount) return;
+    getAgentTradeCount(Number(agent.on_chain_id))
+      .then(setOnChainCount)
+      .catch(() => {}); // non-fatal — contract may not be deployed yet
+  }, [agent, getAgentTradeCount]);
 
   if (!account) return <ConnectPrompt />;
 
@@ -151,8 +268,13 @@ export default function History() {
       </div>
 
       {/* Summary stats */}
+      {/* CHANGE: added "On-Chain Validated" stat box showing how many trades
+          have a confirmed ValidationRegistry artifact. onChainCount comes from
+          getAgentTradeCount(agent.on_chain_id). When it differs from the
+          backend executed count it signals trades that ran before the
+          storeValidation step was added, or where it failed. */}
       {trades.length > 0 && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
           {[
             { label: "Total",    value: trades.length },
             { label: "Executed", value: executedTrades.length },
@@ -162,10 +284,21 @@ export default function History() {
               value: `$${totalPnL.toFixed(4)}`,
               color: totalPnL >= 0 ? "text-green" : "text-red",
             },
-          ].map(({ label, value, color }) => (
+            {
+              label: "On-Chain Validated",
+              value: onChainCount != null ? onChainCount : "—",
+              color: onChainCount != null && onChainCount < executedTrades.length
+                ? "text-yellow"   // some trades lack on-chain proof
+                : "text-green",
+              sub: onChainCount != null && onChainCount < executedTrades.length
+                ? `${executedTrades.length - onChainCount} without proof`
+                : "ValidationRegistry",
+            },
+          ].map(({ label, value, color, sub }) => (
             <div key={label} className="bg-surface border border-border rounded-lg p-3">
               <p className="text-xs text-dim mono">{label}</p>
               <p className={`text-lg font-semibold mono ${color || "text-text"}`}>{value}</p>
+              {sub && <p className="text-[10px] mono text-dim mt-0.5">{sub}</p>}
             </div>
           ))}
         </div>
@@ -186,7 +319,7 @@ export default function History() {
       ) : (
         <Card>
           <div className="overflow-x-auto">
-            <table className="w-full text-xs mono min-w-[700px]">
+            <table className="w-full text-xs mono min-w-[760px]">
               <thead>
                 <tr className="text-dim border-b border-border">
                   <th className="text-left pb-2 font-medium">Pair</th>
@@ -196,70 +329,98 @@ export default function History() {
                   <th className="text-left pb-2 font-medium">PnL</th>
                   <th className="text-left pb-2 font-medium">Risk</th>
                   <th className="text-left pb-2 font-medium">Status</th>
-                  <th className="text-left pb-2 font-medium">On-chain</th>
+                  {/* CHANGE: renamed "On-chain" → "Chain TX" and widened the
+                      column to show on_chain_trade_hash (the RiskRouter bytes32
+                      trade hash) preferentially — this is what Trade.jsx and
+                      Voice.jsx now submit to the backend as on_chain_trade_hash.
+                      Falls back to on_chain_id if it starts with 0x. */}
+                  <th className="text-left pb-2 font-medium">Chain TX</th>
                   <th className="text-left pb-2 font-medium"></th>
                 </tr>
               </thead>
               <tbody>
-                {trades.map((t) => (
-                  <tr key={t.id} className="border-b border-border/40 last:border-0 hover:bg-muted/10">
-                    <td className="py-2 text-text font-medium">{t.token_pair}</td>
-                    <td className="py-2">
-                      <Badge variant={actionColor(t.action)}>{t.action}</Badge>
-                    </td>
-                    <td className="py-2 text-dim">${t.amount_usd?.toFixed(2)}</td>
-                    <td className="py-2 text-dim">{t.confidence?.toFixed(0)}%</td>
-                    <td className={`py-2 font-medium ${(t.pnl ?? 0) >= 0 ? "text-green" : "text-red"}`}>
-                      {t.pnl != null ? `$${t.pnl.toFixed(4)}` : "—"}
-                    </td>
-                    <td className="py-2">
-                      <Badge variant={
-                        t.risk_level === "HIGH" ? "red" :
-                        t.risk_level === "LOW"  ? "green" : "yellow"
-                      }>
-                        {t.risk_level}
-                      </Badge>
-                    </td>
-                    <td className="py-2">
-                      <Badge variant={
-                        t.status === "EXECUTED" ? "green" :
-                        t.status === "REJECTED" ? "red" : "default"
-                      }>
-                        {t.status}
-                      </Badge>
-                    </td>
-                    <td className="py-2">
-                      {t.on_chain_id && t.on_chain_id.startsWith("0x") ? (
-                        <a
-                          href={`https://sepolia.etherscan.io/tx/${t.on_chain_id}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue hover:underline"
+                {trades.map((t) => {
+                  // CHANGE: prefer on_chain_trade_hash (RiskRouter TX hash, 0x…)
+                  // over on_chain_id for the Etherscan link. on_chain_id stores
+                  // the agent NFT id (integer) from AgentRegistry — not a TX hash.
+                  // on_chain_trade_hash is the bytes32 tradeHash from RiskRouter.
+                  const txHash =
+                    (t.on_chain_trade_hash?.startsWith("0x") && t.on_chain_trade_hash) ||
+                    (t.on_chain_id?.startsWith?.("0x")       && t.on_chain_id)         ||
+                    null;
+
+                  return (
+                    <tr key={t.id} className="border-b border-border/40 last:border-0 hover:bg-muted/10">
+                      <td className="py-2 text-text font-medium">{t.token_pair}</td>
+                      <td className="py-2">
+                        <Badge variant={actionColor(t.action)}>{t.action}</Badge>
+                      </td>
+                      <td className="py-2 text-dim">${t.amount_usd?.toFixed(2)}</td>
+                      <td className="py-2 text-dim">{t.confidence?.toFixed(0)}%</td>
+                      <td className={`py-2 font-medium ${(t.pnl ?? 0) >= 0 ? "text-green" : "text-red"}`}>
+                        {t.pnl != null ? `$${t.pnl.toFixed(4)}` : "—"}
+                      </td>
+                      <td className="py-2">
+                        <Badge variant={
+                          t.risk_level === "HIGH" ? "red" :
+                          t.risk_level === "LOW"  ? "green" : "yellow"
+                        }>
+                          {t.risk_level}
+                        </Badge>
+                      </td>
+                      <td className="py-2">
+                        <Badge variant={
+                          t.status === "EXECUTED" ? "green" :
+                          t.status === "REJECTED" ? "red" : "default"
+                        }>
+                          {t.status}
+                        </Badge>
+                      </td>
+                      <td className="py-2">
+                        {txHash ? (
+                          <a
+                            href={`https://sepolia.etherscan.io/tx/${txHash}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue hover:underline"
+                          >
+                            {txHash.slice(0, 10)}…↗
+                          </a>
+                        ) : t.on_chain_approved ? (
+                          // CHANGE: show "approved" badge when RiskRouter approved
+                          // but we don't have a hash to link (pre-fix trades)
+                          <span className="text-green text-[10px]">⛓ approved</span>
+                        ) : (
+                          <span className="text-dim">—</span>
+                        )}
+                      </td>
+                      <td className="py-2">
+                        <button
+                          onClick={() => setReplayId(t.id)}
+                          className="text-dim hover:text-blue mono transition-colors underline"
                         >
-                          Etherscan ↗
-                        </a>
-                      ) : (
-                        <span className="text-dim">—</span>
-                      )}
-                    </td>
-                    <td className="py-2">
-                      <button
-                        onClick={() => setReplayId(t.id)}
-                        className="text-dim hover:text-blue mono transition-colors underline"
-                      >
-                        replay
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                          replay
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         </Card>
       )}
 
+      {/* CHANGE: pass verifyValidationArtifact into ReplayModal so it can run
+          the on-chain proof check. If the contract isn't connected,
+          verifyValidationArtifact will be undefined and the modal hides the
+          verify section gracefully. */}
       {replayId && (
-        <ReplayModal tradeId={replayId} onClose={() => setReplayId(null)} />
+        <ReplayModal
+          tradeId={replayId}
+          onClose={() => setReplayId(null)}
+          verifyValidationArtifact={verifyValidationArtifact}
+        />
       )}
     </div>
   );
