@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, Suspense, lazy } from "react";
 import { useWallet }    from "../context/WalletContext";
 import { useAgent }     from "../context/AgentContext";
 import { useContracts } from "../context/ContractContext";
@@ -7,6 +7,39 @@ import {
   Card, SectionTitle, Badge, ActionBtn,
   Input, Spinner, ConnectPrompt, EmptyState,
 } from "../components/UI";
+const NeuralBackground = lazy(() => import("../components/three/NeuralBackground"));
+
+const G = {
+  card: {
+    background: "var(--card-glass)",
+    border: "1px solid var(--border-glass)",
+    borderRadius: 16,
+    padding: "24px",
+    backdropFilter: "blur(14px)",
+    boxShadow: "0 0 24px rgba(0,191,255,0.05)",
+    marginBottom: 20,
+  },
+  label: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10, fontWeight: 600,
+    textTransform: "uppercase", letterSpacing: "0.12em",
+    color: "var(--neon-green)", marginBottom: 12, display: "block",
+  },
+  h2: {
+    fontFamily: "'Syne', sans-serif", fontWeight: 800,
+    fontSize: "clamp(18px,2.5vw,26px)", margin: "0 0 20px",
+    background: "linear-gradient(90deg,var(--neon-green),var(--neon-blue))",
+    WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
+  },
+  mono: { fontFamily: "'JetBrains Mono', monospace" },
+  select: {
+    width: "100%", padding: "9px 14px",
+    borderRadius: 10, border: "1px solid rgba(0,191,255,0.2)",
+    background: "rgba(0,0,0,0.45)", color: "var(--text2)",
+    fontFamily: "'JetBrains Mono', monospace", fontSize: 12,
+    outline: "none", cursor: "pointer",
+  },
+};
 
 // ─── Static option lists (labels only, no hardcoded prices or data) ───────────
 const STRATEGIES = [
@@ -56,27 +89,35 @@ const STEPS = [
 
 function StepBar({ steps }) {
   return (
-    <div className="flex items-center gap-0 w-full mb-4 overflow-x-auto">
+    <div style={{ display: "flex", alignItems: "center", width: "100%", marginBottom: 20, overflowX: "auto", gap: 0 }}>
       {STEPS.map((s, i) => {
         const st = steps[s.id];
-        const dot =
-          st === "done"    ? "bg-green"  :
-          st === "error"   ? "bg-red"    :
-          st === "pending" ? "bg-yellow animate-pulse" :
-                             "bg-muted";
-        const text =
-          st === "done"    ? "text-green"  :
-          st === "error"   ? "text-red"    :
-          st === "pending" ? "text-yellow" :
-                             "text-dim";
+        const color =
+          st === "done"    ? "var(--neon-green)"  :
+          st === "error"   ? "#FF4444"  :
+          st === "pending" ? "#FFB800"  :
+                             "var(--muted)";
+        const textColor =
+          st === "done"    ? "var(--neon-green)"  :
+          st === "error"   ? "#FF4444"  :
+          st === "pending" ? "#FFB800"  :
+                             "#6b7280";
         return (
           <React.Fragment key={s.id}>
-            <div className="flex flex-col items-center min-w-[80px]">
-              <div className={`w-3 h-3 rounded-full ${dot} transition-all`} />
-              <span className={`text-[10px] mono mt-1 text-center ${text}`}>{s.label}</span>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", minWidth: 80 }}>
+              <div style={{
+                width: 14, height: 14, borderRadius: "50%",
+                background: color,
+                boxShadow: st && st !== "pending" ? `0 0 10px ${color}80` : "none",
+                transition: "all 0.3s",
+                animation: st === "pending" ? "pdot 1s ease-in-out infinite" : "none",
+              }} />
+              <span style={{ ...G.mono, fontSize: 9, marginTop: 6, textAlign: "center", color: textColor }}>
+                {s.label}
+              </span>
             </div>
             {i < STEPS.length - 1 && (
-              <div className="flex-1 h-px bg-border min-w-[12px] mb-4" />
+              <div style={{ flex: 1, height: 1, background: "rgba(0,191,255,0.2)", minWidth: 12, marginBottom: 14 }} />
             )}
           </React.Fragment>
         );
@@ -361,89 +402,97 @@ export default function Trade() {
 
   // ─────────────────────────────────────────────────────────────────────────────
   return (
-    <div className="max-w-6xl mx-auto px-4 py-8 space-y-6">
+    <div style={{ position: "relative" }}>
+    <Suspense fallback={null}>
+      <NeuralBackground agentActive={executing} />
+    </Suspense>
+    <div style={{ maxWidth: 1100, margin: "0 auto", padding: "40px 24px", position: "relative", zIndex: 1 }}>
 
       {/* ── Controls ─────────────────────────────────────────────────────────── */}
       <div>
-        <SectionTitle>Trade</SectionTitle>
-        <Card>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-            <Input
-              label="Token"
-              value={token}
-              onChange={setToken}
-              options={tokens}
-            />
-            <Input
-              label="Strategy"
-              value={strategy}
-              onChange={setStrategy}
-              options={STRATEGIES}
-            />
-            <Input
-              label="Action Mode"
-              value={actionMode}
-              onChange={setActionMode}
-              options={ACTION_OPTIONS}
-            />
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-dim mono">Agent</label>
-              <div className="bg-bg border border-border rounded px-3 py-2 text-sm mono text-dim truncate">
-                {agent.name} · {agent.strategy} · ${agent.max_trade_usd}
-                {agent.on_chain_id && (
-                  <span className="ml-1 text-blue">⛓#{agent.on_chain_id}</span>
-                )}
+        <span style={G.label}>Trade Execution</span>
+        <h1 style={G.h2}>AI Trade Command</h1>
+        <div style={G.card}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px,1fr))", gap: 12, marginBottom: 16 }}>
+            {[
+              { label: "Token", value: token, opts: tokens, set: setToken },
+              { label: "Strategy", value: strategy, opts: STRATEGIES, set: setStrategy },
+              { label: "Action Mode", value: actionMode, opts: ACTION_OPTIONS, set: setActionMode },
+            ].map(({ label, value, opts, set }) => (
+              <div key={label}>
+                <p style={{ ...G.mono, fontSize: 9, color: "#6b7280", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.08em" }}>{label}</p>
+                <select value={value} onChange={(e) => set(e.target.value)} style={G.select}>
+                  {opts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
+            ))}
+            <div>
+              <p style={{ ...G.mono, fontSize: 9, color: "#6b7280", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.08em" }}>Agent</p>
+              <div style={{ ...G.select, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--neon-blue)" }}>
+                {agent.name} · {agent.strategy}
+                {agent.on_chain_id && <span style={{ color: "var(--neon-green)", marginLeft: 6 }}>⛓#{agent.on_chain_id}</span>}
               </div>
             </div>
           </div>
 
           {actionMode !== "AI" && (
-            <div className="mb-3 px-3 py-2 rounded border border-yellow/20 bg-yellow/5">
-              <p className="text-xs mono text-yellow">
-                ⚠ Manual override: Trade will be forced to{" "}
-                <strong>{actionMode}</strong> regardless of AI recommendation.
+            <div style={{ marginBottom: 12, padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(255,184,0,0.3)", background: "rgba(255,184,0,0.06)" }}>
+              <p style={{ ...G.mono, fontSize: 11, color: "#FFB800" }}>
+                ⚠ Manual override — forcing <strong>{actionMode}</strong>
               </p>
             </div>
           )}
 
           {!agent.on_chain_id && (
-            <div className="mb-3 px-3 py-2 rounded border border-blue/20 bg-blue/5">
-              <p className="text-xs mono text-blue">
-                ℹ Agent not registered on-chain. Blockchain steps (EIP-712, RiskRouter,
-                ValidationRegistry) will be skipped. Register on-chain from the Dashboard
-                to enable full blockchain validation.
+            <div style={{ marginBottom: 12, padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(0,191,255,0.2)", background: "rgba(0,191,255,0.05)" }}>
+              <p style={{ ...G.mono, fontSize: 11, color: "var(--neon-blue)" }}>
+                ℹ Agent not registered on-chain. Blockchain steps will be skipped.
               </p>
             </div>
           )}
 
-          <div className="flex gap-2 items-center flex-wrap">
-            <ActionBtn onClick={handleDecision} loading={loading} disabled={executing}>
-              Get AI Decision
-            </ActionBtn>
-            <ActionBtn
-              onClick={handleExecute}
-              loading={executing}
-              variant="primary"
-              disabled={isFlowActive}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button
+              onClick={handleDecision} disabled={loading || executing}
+              style={{
+                fontFamily: "'JetBrains Mono',monospace", fontSize: 12, fontWeight: 700,
+                padding: "10px 20px", borderRadius: 10,
+                border: "1px solid rgba(0,255,136,0.4)", background: "rgba(0,255,136,0.1)",
+                color: "var(--neon-green)", cursor: loading||executing ? "not-allowed" : "pointer",
+                opacity: loading||executing ? 0.5 : 1, transition: "all 0.15s",
+              }}
             >
-              Execute Trade
-            </ActionBtn>
+              {loading ? "Analyzing…" : "⚡ Get AI Decision"}
+            </button>
+            <button
+              onClick={handleExecute} disabled={isFlowActive}
+              style={{
+                fontFamily: "'JetBrains Mono',monospace", fontSize: 12, fontWeight: 700,
+                padding: "10px 20px", borderRadius: 10,
+                border: "1px solid rgba(0,191,255,0.4)",
+                background: isFlowActive ? "rgba(0,191,255,0.05)" : "linear-gradient(135deg,rgba(0,191,255,0.3),rgba(0,255,136,0.2))",
+                color: "var(--neon-blue)", cursor: isFlowActive ? "not-allowed" : "pointer",
+                opacity: isFlowActive ? 0.5 : 1, transition: "all 0.15s",
+              }}
+            >
+              {executing ? "Executing…" : "🚀 Execute Trade"}
+            </button>
           </div>
 
           {error && (
-            <p className="text-xs text-red mono mt-3 bg-red/5 border border-red/20 rounded px-3 py-2">
-              {error}
-            </p>
+            <div style={{ marginTop: 12, padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(255,68,68,0.3)", background: "rgba(255,68,68,0.06)" }}>
+              <p style={{ ...G.mono, fontSize: 11, color: "#FF4444" }}>{error}</p>
+            </div>
           )}
-        </Card>
+        </div>
       </div>
 
       {/* ── Step Progress Bar ─────────────────────────────────────────────────── */}
       {showStepBar && (
-        <Card>
-          <p className="text-xs text-dim mono mb-3 font-semibold">Execution Pipeline</p>
+        <div style={G.card}>
+          <span style={G.label}>Execution Pipeline</span>
           <StepBar steps={steps} />
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs mono text-dim mt-1">
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
             {steps.eip712 === "pending" && (
               <p className="text-yellow col-span-2">
                 🦊 MetaMask: Sign typed trade data (EIP-712) — no gas required for this step
@@ -463,7 +512,7 @@ export default function Trade() {
               </p>
             )}
             {steps.riskrouter === "done" && chainMeta?.txHash && (
-              <p className="col-span-2">
+              <p style={{ gridColumn: "1 / -1", ...G.mono, fontSize: 10, color: "#00BFFF" }}>
                 RiskRouter TX:{" "}
                 <a
                   href={`https://sepolia.etherscan.io/tx/${chainMeta.txHash}`}
@@ -476,7 +525,7 @@ export default function Trade() {
               </p>
             )}
           </div>
-        </Card>
+        </div>
       )}
 
       {loading && !decision && (
@@ -550,10 +599,9 @@ export default function Trade() {
 
       {/* ── Execution Result ──────────────────────────────────────────────────── */}
       {result && (
-        <div>
-          <SectionTitle>Execution Result</SectionTitle>
-          <Card>
-            <div className="flex items-center gap-3 mb-3 flex-wrap">
+        <div style={G.card}>
+          <span style={G.label}>Execution Result</span>
+          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
               <Badge variant={
                 result.status === "EXECUTED" ? "green" :
                 result.status === "REJECTED" ? "red"   : "yellow"
@@ -654,9 +702,10 @@ export default function Trade() {
                 </span>
               </div>
             )}
-          </Card>
         </div>
       )}
+
+    </div>
     </div>
   );
 }

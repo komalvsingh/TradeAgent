@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, Suspense, lazy } from "react";
 import { useWallet } from "../context/WalletContext";
 import { useAgent } from "../context/AgentContext";
 import { useContracts } from "../context/ContractContext";
@@ -12,6 +12,8 @@ import {
   Spinner, EmptyState, ConnectPrompt, ActionBtn,
 } from "../components/UI";
 import RegisterAgent from "../components/RegisterAgent";
+const NeuralBackground = lazy(() => import("../components/three/NeuralBackground"));
+const RiskShield = lazy(() => import("../components/three/RiskShield"));
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function actionColor(a) {
@@ -605,7 +607,13 @@ export default function Dashboard() {
   // Accent colors (same palette as Home.jsx)
   const acColors = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "var(--c5)", "var(--c6)"];
 
+  const drawdownPct = stats?.current_drawdown ?? 0;
+
   return (
+    <div style={{ position: "relative" }}>
+    <Suspense fallback={null}>
+      <NeuralBackground agentActive={agent?.strategy != null} />
+    </Suspense>
     <div style={{
       maxWidth: 1100,
       margin: "0 auto",
@@ -613,6 +621,8 @@ export default function Dashboard() {
       display: "flex",
       flexDirection: "column",
       gap: 52,
+      position: "relative",
+      zIndex: 1,
     }}>
 
       {/* ════════════════════════════════════════════════════
@@ -818,26 +828,35 @@ export default function Dashboard() {
               ))}
             </div>
 
-            {/* ── Drawdown Monitor ─────────────────────────── */}
+            {/* ── Drawdown Monitor + 3D Shield ─────────────── */}
             {(stats.current_drawdown != null || stats.max_drawdown_pct != null) && (
               <ACard ac="var(--purple)">
-                <p style={{ ...S.metricLabel, marginBottom: 14 }}>Drawdown Monitor</p>
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  {stats.current_drawdown != null && <DrawdownBar pct={stats.current_drawdown} label="Current Drawdown" />}
-                  {stats.max_drawdown_pct != null && <DrawdownBar pct={stats.max_drawdown_pct} label="Max Drawdown (All-time)" />}
-                  <DrawdownBar pct={stats.daily_loss_pct} label="Daily Loss Cap (5%)" />
-                </div>
-                <div style={{ display: "flex", gap: 16, marginTop: 14, flexWrap: "wrap" }}>
-                  {[
-                    { dot: "var(--green)",  label: "< 8% normal" },
-                    { dot: "var(--yellow)", label: "8–15% reduced sizing" },
-                    { dot: "var(--red)",    label: "> 15% circuit breaker" },
-                  ].map(({ dot, label }) => (
-                    <div key={label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <div style={{ width: 7, height: 7, borderRadius: "50%", background: dot, flexShrink: 0 }} />
-                      <span style={{ ...S.mono, fontSize: 10, color: "var(--dim)" }}>{label}</span>
+                <div style={{ display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
+                  {/* Shield */}
+                  <Suspense fallback={null}>
+                    <RiskShield drawdownPct={drawdownPct} dangerThreshold={15} size={200} />
+                  </Suspense>
+                  {/* Bars */}
+                  <div style={{ flex: 1, minWidth: 200 }}>
+                    <p style={{ ...S.metricLabel, marginBottom: 14 }}>Drawdown Monitor</p>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                      {stats.current_drawdown != null && <DrawdownBar pct={stats.current_drawdown} label="Current Drawdown" />}
+                      {stats.max_drawdown_pct != null && <DrawdownBar pct={stats.max_drawdown_pct} label="Max Drawdown (All-time)" />}
+                      <DrawdownBar pct={stats.daily_loss_pct} label="Daily Loss Cap (5%)" />
                     </div>
-                  ))}
+                    <div style={{ display: "flex", gap: 16, marginTop: 14, flexWrap: "wrap" }}>
+                      {[
+                        { dot: "var(--green)",  label: "< 8% normal" },
+                        { dot: "var(--yellow)", label: "8–15% reduced sizing" },
+                        { dot: "var(--red)",    label: "> 15% circuit breaker" },
+                      ].map(({ dot, label }) => (
+                        <div key={label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <div style={{ width: 7, height: 7, borderRadius: "50%", background: dot, flexShrink: 0 }} />
+                          <span style={{ ...S.mono, fontSize: 10, color: "var(--dim)" }}>{label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </ACard>
             )}
@@ -982,6 +1001,7 @@ export default function Dashboard() {
       ════════════════════════════════════════════════════ */}
       <FailurePanel account={account} />
 
+    </div>
     </div>
   );
 }

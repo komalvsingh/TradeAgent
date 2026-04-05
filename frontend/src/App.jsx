@@ -4,13 +4,15 @@ import { WalletProvider }   from "./context/WalletContext";
 import { ContractProvider } from "./context/ContractContext";
 import { AgentProvider }    from "./context/AgentContext";
 import { ThemeProvider }    from "./context/ThemeContext";
-import Navbar     from "./components/Navbar";
-import Home       from "./pages/Home";
-import Dashboard  from "./pages/Dashboard";
-import Trade      from "./pages/Trade";
-import Market     from "./pages/Market";
-import History    from "./pages/History";
-import Voice      from "./pages/Voice";
+import Navbar             from "./components/Navbar";
+import Home               from "./pages/Home";
+import Dashboard          from "./pages/Dashboard";
+import Trade              from "./pages/Trade";
+import Market             from "./pages/Market";
+import History            from "./pages/History";
+import Voice              from "./pages/Voice";
+import IdentityHub        from "./pages/IdentityHub";
+import ArtifactsExplorer  from "./pages/ArtifactsExplorer";
 
 // Home renders its own Navbar internally.
 // All other pages use the shared Navbar here.
@@ -24,12 +26,14 @@ function AppLayout() {
       {!isHome && <Navbar />}
       <main style={{ paddingTop: isHome ? 0 : 52 }}>
         <Routes>
-          <Route path="/"          element={<Home />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/trade"     element={<Trade />} />
-          <Route path="/market"    element={<Market />} />
-          <Route path="/history"   element={<History />} />
-          <Route path="/voice"     element={<Voice />} />
+          <Route path="/"           element={<Home />} />
+          <Route path="/dashboard"  element={<Dashboard />} />
+          <Route path="/trade"      element={<Trade />} />
+          <Route path="/market"     element={<Market />} />
+          <Route path="/history"    element={<History />} />
+          <Route path="/voice"      element={<Voice />} />
+          <Route path="/identity"   element={<IdentityHub />} />
+          <Route path="/artifacts"  element={<ArtifactsExplorer />} />
         </Routes>
       </main>
     </div>

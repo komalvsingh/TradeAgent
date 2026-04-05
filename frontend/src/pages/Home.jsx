@@ -1,8 +1,9 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, Suspense, lazy } from "react";
 import { Link } from "react-router-dom";
 import { useWallet } from "../context/WalletContext";
 import { useTheme }  from "../context/ThemeContext";
 import Navbar from "../components/Navbar";
+const NeuralBackground = lazy(() => import("../components/three/NeuralBackground"));
 
 function Counter({ end, suffix = "" }) {
   const [val, setVal] = useState(0);
@@ -65,6 +66,7 @@ export default function Home() {
         minHeight:"100vh", paddingTop:52,
         backgroundColor:"var(--bg)", position:"relative",
       }} className="grid-bg">
+        <Suspense fallback={null}><NeuralBackground agentActive={false} /></Suspense>
 
         {/* ── Orbs ──────────────────────────────────────────────────────────── */}
         {isDark ? (
@@ -119,10 +121,13 @@ export default function Home() {
               {account ? (
                 <>
                   <Link to="/dashboard" className="btn btn-primary" style={{ fontSize:13 }}>
-                    Go to Dashboard →
+                    Command Center →
                   </Link>
-                  <Link to="/trade" className="btn btn-ghost" style={{ fontSize:13 }}>
-                    Start Trading
+                  <Link to="/identity" className="btn btn-ghost" style={{ fontSize:13 }}>
+                    Identity Hub
+                  </Link>
+                  <Link to="/artifacts" className="btn btn-ghost" style={{ fontSize:13 }}>
+                    Artifacts
                   </Link>
                 </>
               ) : (
@@ -362,8 +367,8 @@ export default function Home() {
                 · Hackathon · Sepolia Testnet
               </span>
             </div>
-            <div style={{ display:"flex", gap:20 }}>
-              {["/dashboard","/trade","/market","/history","/voice"].map(p => (
+            <div style={{ display:"flex", gap:20, flexWrap:"wrap" }}>
+              {["/dashboard","/trade","/market","/history","/identity","/artifacts"].map(p => (
                 <Link key={p} to={p} style={{
                   fontFamily:"'JetBrains Mono',monospace",
                   fontSize:11, color:"var(--dim)", textTransform:"capitalize",

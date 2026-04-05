@@ -30,6 +30,16 @@
   --c4: #F59E0B;
   --c5: #8B5CF6;
   --c6: #EF4444;
+
+  /* Neon command-center palette (Trade, IdentityHub, Artifacts) */
+  --neon-green:  #00FF88;
+  --neon-blue:   #00BFFF;
+  --neon-purple: #AC89FF;
+
+  /* Glassmorphism surfaces */
+  --card-glass:    rgba(13, 17, 23, 0.80);
+  --card-glass-sm: rgba(13, 17, 23, 0.75);
+  --border-glass:  rgba(0, 191, 255, 0.15);
 }
 
 /* ══════════════════════════════════════════════════════════════════

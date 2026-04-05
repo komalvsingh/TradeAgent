@@ -5,12 +5,13 @@ import { useAgent }  from "../context/AgentContext";
 import { useTheme }  from "../context/ThemeContext";
 
 const NAV = [
-  { path: "/",          label: "Home"      },
-  { path: "/dashboard", label: "Dashboard" },
-  { path: "/trade",     label: "Trade"     },
-  { path: "/market",    label: "Market"    },
-  { path: "/history",   label: "History"   },
-  { path: "/voice",     label: "Voice"     },
+  { path: "/",           label: "Home"       },
+  { path: "/dashboard",  label: "Dashboard"  },
+  { path: "/identity",   label: "Identity"   },
+  { path: "/artifacts",  label: "Artifacts"  },
+  { path: "/trade",      label: "Trade"      },
+  { path: "/market",     label: "Market"     },
+  { path: "/history",    label: "History"    },
 ];
 
 export default function Navbar() {
