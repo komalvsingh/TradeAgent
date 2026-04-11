@@ -1,12 +1,151 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback, Suspense, lazy } from "react";
 import { useWallet }    from "../context/WalletContext";
 import { useAgent }     from "../context/AgentContext";
-import { useContracts } from "../context/ContractContext"; // CHANGE: added — needed for on-chain flow
+import { useContracts } from "../context/ContractContext";
 import { sendVoice, getDashboard, executeTrade } from "../utils/api";
 import {
-  Card, SectionTitle, ActionBtn, Badge,
-  ConnectPrompt, EmptyState, Spinner,
+  Badge, Spinner, ConnectPrompt, EmptyState,
 } from "../components/UI";
+const NeuralBackground = lazy(() => import("../components/three/NeuralBackground"));
+
+// ── Style system (matches Trade.jsx / Dashboard.jsx "Command Center" look) ────
+const G = {
+  card: {
+    background: "var(--card-glass)",
+    border: "1px solid var(--border-glass)",
+    borderRadius: 16,
+    padding: "24px",
+    backdropFilter: "blur(14px)",
+    boxShadow: "0 0 24px rgba(0,191,255,0.05)",
+    marginBottom: 20,
+  },
+  label: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10, fontWeight: 600,
+    textTransform: "uppercase", letterSpacing: "0.12em",
+    color: "var(--neon-green)", marginBottom: 12, display: "block",
+  },
+  h2: {
+    fontFamily: "'Syne', sans-serif", fontWeight: 800,
+    fontSize: "clamp(18px,2.5vw,26px)", margin: "0 0 20px",
+    background: "linear-gradient(90deg,var(--neon-green),var(--neon-blue))",
+    WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
+  },
+  mono: { fontFamily: "'JetBrains Mono', monospace" },
+  metricVal: {
+    fontFamily: "'Syne', sans-serif",
+    fontSize: 24, fontWeight: 800, lineHeight: 1,
+    letterSpacing: "-0.03em",
+  },
+  metricLabel: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10, color: "var(--dim)",
+    textTransform: "uppercase", letterSpacing: "0.08em",
+  },
+  metricSub: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10, color: "var(--dim)", marginTop: 2,
+  },
+  tag: {
+    display: "inline-flex", alignItems: "center",
+    padding: "3px 10px", borderRadius: 999,
+    fontSize: 11, fontFamily: "'JetBrains Mono', monospace",
+    fontWeight: 600, border: "1px solid var(--border)",
+  },
+};
+
+const TAG_COLORS = {
+  green:   { bg: "rgba(34,197,94,0.12)",  color: "var(--green)",  border: "rgba(34,197,94,0.3)" },
+  red:     { bg: "rgba(239,68,68,0.12)",  color: "var(--red)",    border: "rgba(239,68,68,0.3)" },
+  blue:    { bg: "rgba(59,130,246,0.12)", color: "var(--accent)",  border: "rgba(59,130,246,0.3)" },
+  yellow:  { bg: "rgba(245,158,11,0.12)", color: "var(--yellow)",  border: "rgba(245,158,11,0.3)" },
+  default: { bg: "var(--muted)",           color: "var(--dim)",    border: "var(--border)" },
+};
+
+function Tag({ children, variant = "default" }) {
+  const c = TAG_COLORS[variant] || TAG_COLORS.default;
+  return (
+    <span style={{ ...G.tag, background: c.bg, color: c.color, borderColor: c.border }}>
+      {children}
+    </span>
+  );
+}
+
+// ── Accent Card (matches Dashboard.jsx ACard) ─────────────────────────────────
+function ACard({ children, ac = "var(--accent)", style = {} }) {
+  const [hov, setHov] = useState(false);
+  return (
+    <div
+      style={{
+        background: "var(--card)",
+        border: "1px solid var(--border)",
+        borderRadius: 16,
+        padding: "18px 20px",
+        position: "relative",
+        overflow: "hidden",
+        transition: "transform 0.2s ease, box-shadow 0.2s ease",
+        transform: hov ? "translateY(-3px)" : "none",
+        boxShadow: hov ? "0 10px 32px rgba(0,0,0,0.14)" : "none",
+        ...style,
+      }}
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => setHov(false)}
+    >
+      <div style={{
+        position: "absolute", top: 0, left: 0, right: 0, height: 3,
+        borderRadius: "16px 16px 0 0", background: ac,
+      }} />
+      {children}
+    </div>
+  );
+}
+
+// ── Pipeline Step Bar (matches Trade.jsx StepBar) ─────────────────────────────
+const VOICE_STEPS = [
+  { id: "sig",        label: "Wallet Approval" },
+  { id: "riskrouter", label: "RiskRouter TX"   },
+  { id: "backend",    label: "Backend Execute" },
+  { id: "validation", label: "Store Validation" },
+];
+
+function StepBar({ steps }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", width: "100%", marginBottom: 16, overflowX: "auto", gap: 0 }}>
+      {VOICE_STEPS.map((s, i) => {
+        const st = steps[s.id];
+        const color =
+          st === "done"    ? "var(--neon-green)" :
+          st === "error"   ? "#FF4444" :
+          st === "pending" ? "#FFB800" :
+                             "var(--muted)";
+        const textColor =
+          st === "done"    ? "var(--neon-green)" :
+          st === "error"   ? "#FF4444" :
+          st === "pending" ? "#FFB800" :
+                             "#6b7280";
+        return (
+          <React.Fragment key={s.id}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", minWidth: 80 }}>
+              <div style={{
+                width: 14, height: 14, borderRadius: "50%",
+                background: color,
+                boxShadow: st && st !== "pending" ? `0 0 10px ${color}80` : "none",
+                transition: "all 0.3s",
+                animation: st === "pending" ? "pdot 1s ease-in-out infinite" : "none",
+              }} />
+              <span style={{ ...G.mono, fontSize: 9, marginTop: 6, textAlign: "center", color: textColor }}>
+                {s.label}
+              </span>
+            </div>
+            {i < VOICE_STEPS.length - 1 && (
+              <div style={{ flex: 1, height: 1, background: "rgba(0,191,255,0.2)", minWidth: 12, marginBottom: 14 }} />
+            )}
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
 
 const EXAMPLES = [
   "Buy ETH now",
@@ -93,12 +232,6 @@ export default function Voice() {
   const { account, signer }  = useWallet();
   const { agent, refetch }   = useAgent();
 
-  // CHANGE: destructure on-chain helpers from ContractContext.
-  // - submitTradeIntent: signs EIP-712 struct + submits to RiskRouter (same as Trade.jsx).
-  // - storeValidation:   stores audit record on ValidationRegistry after execution.
-  // - getAgentNonce:     read current nonce before building the intent.
-  // - getAgentDailyStats: shows real on-chain daily loss in the stats strip now that
-  //   the fixed RiskRouter actually increments totalLossUsd.
   const {
     submitTradeIntent,
     storeValidation,
@@ -122,17 +255,13 @@ export default function Voice() {
   const [history,      setHistory]      = useState([]);
   const [stats,        setStats]        = useState(null);
 
-  // CHANGE: replaced single sigStatus string with a richer chainStep object so
-  // the UI can reflect each stage of the on-chain flow independently —
-  // matching the step-bar pattern from Trade.jsx.
-  // Values per key: null | "pending" | "done" | "error"
   const [chainStep, setChainStep] = useState({
-    sig:        null,  // MetaMask plain-text approval (kept for Voice UX)
-    riskrouter: null,  // submitTradeIntent on-chain TX
-    validation: null,  // storeValidation on-chain TX
+    sig:        null,
+    riskrouter: null,
+    backend:    null,
+    validation: null,
   });
 
-  // CHANGE: on-chain daily stats for the stats strip
   const [onChainDaily, setOnChainDaily] = useState(null);
 
   const inputRef = useRef(null);
@@ -143,9 +272,6 @@ export default function Voice() {
     if (!account || !agent) return;
     getDashboard(account).then(setStats).catch(() => {});
 
-    // CHANGE: fetch on-chain daily stats if agent has an on-chain ID.
-    // getAgentDailyStats returns { date, totalLossUsd (cents), tradeCount }.
-    // totalLossUsd is now real because the fixed RiskRouter increments it.
     if (agent.on_chain_id && getAgentDailyStats) {
       getAgentDailyStats(Number(agent.on_chain_id))
         .then(setOnChainDaily)
@@ -155,7 +281,7 @@ export default function Voice() {
 
   if (!account) return <ConnectPrompt />;
   if (!agent)   return (
-    <div className="max-w-3xl mx-auto px-4 py-8">
+    <div style={{ maxWidth: 1100, margin: "0 auto", padding: "40px 24px" }}>
       <EmptyState message="Register an agent first on the Dashboard." />
     </div>
   );
@@ -168,13 +294,11 @@ export default function Voice() {
   const resetFlow = () => {
     setError(null);
     setTradeResult(null);
-    setChainStep({ sig: null, riskrouter: null, validation: null });
+    setChainStep({ sig: null, riskrouter: null, backend: null, validation: null });
   };
 
   // ── Send command ───────────────────────────────────────────────────────────
-  // CHANGE: wrapped in useCallback so toggleMic (which calls send) can safely
-  // list it as a dependency without the eslint exhaustive-deps warning caused
-  // by the original inline function definition.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const send = useCallback(async (text) => {
     const cmd = (text || input).trim();
     if (!cmd) return;
@@ -210,22 +334,9 @@ export default function Voice() {
       setLoading(false);
       inputRef.current?.focus();
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [input, account, stop, speak, refetch]);
 
   // ── Execute voice trade ───────────────────────────────────────────────────
-  //
-  // CHANGE: Now runs the same full on-chain flow as Trade.jsx handleExecute
-  // when agent.on_chain_id is present:
-  //
-  //   1. MetaMask signMessage (soft approval — kept for Voice UX, free/no gas)
-  //   2. submitTradeIntent() → EIP-712 sign + RiskRouter TX  (new)
-  //   3. executeTrade() on backend with on-chain proof fields  (updated payload)
-  //   4. storeValidation() → ValidationRegistry audit record  (new)
-  //
-  // If agent has no on_chain_id, steps 2 and 4 are skipped gracefully —
-  // the trade executes via backend only, same as before.
-  //
   const executeVoiceTrade = async () => {
     if (!response?.decision) return;
     setExecuting(true);
@@ -237,8 +348,6 @@ export default function Voice() {
     const strategy = agent.strategy;
 
     // ── Step 1: MetaMask soft approval (plain text) ─────────────────────────
-    // Kept as-is for Voice UX — user hears the prompt, sees the summary.
-    // This is NOT the EIP-712 signing; that happens inside submitTradeIntent.
     setStep("sig", "pending");
     speak("Please approve the trade in your MetaMask wallet.");
 
@@ -267,8 +376,6 @@ export default function Voice() {
     }
 
     // ── Step 2: EIP-712 sign + RiskRouter on-chain TX ───────────────────────
-    // CHANGE: Added — mirrors Trade.jsx handleExecute steps 2a/2b.
-    // Only runs when agent has an on-chain registration.
     let tradeHash       = null;
     let onChainApproved = false;
     let nonce           = null;
@@ -276,12 +383,9 @@ export default function Voice() {
     if (agentOnChainId != null && submitTradeIntent) {
       setStep("riskrouter", "pending");
       try {
-        // Convert amount_usd (dollars) to integer cents for the contract.
         const amountUsdCents = Math.round((response.decision.amount_usd || 0) * 100);
         nonce = await getAgentNonce(agentOnChainId);
 
-        // submitTradeIntent internally: builds EIP-712 struct, opens MetaMask
-        // for typed-data signing (no gas), then submits on-chain TX (gas required).
         speak("Approve the RiskRouter transaction in MetaMask.");
         const intentResult = await submitTradeIntent({
           agentId:    agentOnChainId,
@@ -318,19 +422,16 @@ export default function Voice() {
           setExecuting(false);
           return;
         }
-        // Non-rejection chain error: log and continue with backend execution.
         console.warn("RiskRouter step failed, falling back to backend:", chainErr.message);
         setStep("riskrouter", "error");
       }
 
     } else {
-      // No on-chain ID — skip chain steps gracefully.
       setStep("riskrouter", "done");
     }
 
     // ── Step 3: Backend execution ───────────────────────────────────────────
-    // CHANGE: payload now includes the on-chain proof fields so the backend
-    // can link the DB trade record to the on-chain TX — same as Trade.jsx.
+    setStep("backend", "pending");
     try {
       const result = await executeTrade({
         token,
@@ -341,6 +442,7 @@ export default function Voice() {
         on_chain_nonce:      nonce            ?? undefined,
         agent_on_chain_id:   agentOnChainId   ?? undefined,
       });
+      setStep("backend", "done");
       setTradeResult(result);
 
       const pnlStr = result.pnl != null
@@ -353,9 +455,6 @@ export default function Voice() {
       );
 
       // ── Step 4: ValidationRegistry audit record ─────────────────────────
-      // CHANGE: Added — mirrors Trade.jsx step 4.
-      // storeValidation (5 user-facing args) handles timestamp + personal_sign
-      // internally. Non-fatal if it fails — trade already executed.
       if (agentOnChainId != null && storeValidation && result.id) {
         setStep("validation", "pending");
         try {
@@ -379,7 +478,6 @@ export default function Voice() {
       const s = await getDashboard(account).catch(() => null);
       if (s) setStats(s);
 
-      // CHANGE: refresh on-chain daily stats so the strip shows updated loss
       if (agentOnChainId != null && getAgentDailyStats) {
         getAgentDailyStats(agentOnChainId).then(setOnChainDaily).catch(() => {});
       }
@@ -388,6 +486,7 @@ export default function Voice() {
 
     } catch (e) {
       const msg = e.response?.data?.detail || e.message;
+      setStep("backend", "error");
       setError(msg);
       speak(`Trade execution failed: ${msg}`);
     } finally {
@@ -396,7 +495,7 @@ export default function Voice() {
   };
 
   // ── Microphone ────────────────────────────────────────────────────────────
-  // CHANGE: send is now a stable useCallback ref, so it's safe in this dep array.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const toggleMic = useCallback(() => {
     if (!SpeechRecognition) {
       setError("Your browser doesn't support voice input. Try Chrome.");
@@ -433,476 +532,674 @@ export default function Voice() {
     setError(null);
   }, [listening, send]);
 
-  // Derive simple sig status for the MetaMask waiting card (kept for Voice UX)
   const sigWaiting = chainStep.sig === "pending";
-  const sigSigned  = chainStep.sig === "done";
+  const showStepBar = Object.values(chainStep).some((s) => s !== null);
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
-    <div className="max-w-3xl mx-auto px-4 py-8 space-y-6">
+    <div style={{ position: "relative" }}>
+    <Suspense fallback={null}>
+      <NeuralBackground agentActive={executing || listening} />
+    </Suspense>
+    <div style={{
+      maxWidth: 1100,
+      margin: "0 auto",
+      padding: "40px 24px",
+      display: "flex",
+      flexDirection: "column",
+      gap: 32,
+      position: "relative",
+      zIndex: 1,
+    }}>
 
-      {/* Live agent stats strip */}
-      {/* CHANGE: added on-chain daily loss column when getAgentDailyStats data
-          is available. totalLossUsd comes in cents — divide by 100 for dollars.
-          This was always zero before the RiskRouter fix; now it's real. */}
-      <Card className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-3">
-          <span className="mono text-sm font-semibold">{agent.name}</span>
-          <Badge variant="blue">{agent.strategy}</Badge>
-          <Badge variant={
-            agent.risk_tolerance === "HIGH" ? "red" :
-            agent.risk_tolerance === "LOW"  ? "green" : "yellow"
-          }>
-            {agent.risk_tolerance}
-          </Badge>
-          {agent.on_chain_id && (
-            <Badge variant="blue">⛓#{agent.on_chain_id}</Badge>
-          )}
-        </div>
-        {stats ? (
-          <div className="flex gap-4 text-xs mono flex-wrap">
-            <span>
-              <span className="text-dim">PnL: </span>
-              <span className={stats.total_pnl >= 0 ? "text-green" : "text-red"}>
-                ${stats.total_pnl?.toFixed(4)}
-              </span>
-            </span>
-            <span>
-              <span className="text-dim">Trust: </span>
-              <span className={stats.trust_score >= 60 ? "text-green" : "text-yellow"}>
-                {stats.trust_score?.toFixed(0)}/100
-              </span>
-            </span>
-            <span>
-              <span className="text-dim">Trades: </span>
-              <span className="text-text">{stats.total_trades}</span>
-            </span>
-            <span>
-              <span className="text-dim">Win Rate: </span>
-              <span className="text-text">{stats.win_rate?.toFixed(1)}%</span>
-            </span>
-            {/* CHANGE: on-chain daily loss from fixed RiskRouter */}
-            {onChainDaily && (
-              <span>
-                <span className="text-dim">Chain Loss Today: </span>
-                <span className={onChainDaily.totalLossUsd / 100 > 500 ? "text-red" :
-                                 onChainDaily.totalLossUsd / 100 > 100 ? "text-yellow" : "text-green"}>
-                  ${(onChainDaily.totalLossUsd / 100).toFixed(2)}
+      {/* ════════════════════════════════════════════════════
+          AGENT HERO STRIP
+      ════════════════════════════════════════════════════ */}
+      <section>
+        <span style={G.label}>Agent</span>
+        <div style={{
+          background: "var(--card)",
+          border: "1px solid var(--border)",
+          borderRadius: 20,
+          padding: "20px 24px",
+          position: "relative",
+          overflow: "hidden",
+        }}>
+          {/* Gradient top bar */}
+          <div style={{
+            position: "absolute", top: 0, left: 0, right: 0, height: 3,
+            background: "linear-gradient(90deg, var(--accent), var(--accent2))",
+            borderRadius: "20px 20px 0 0",
+          }} />
+
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ ...G.mono, fontSize: 14, fontWeight: 700, color: "var(--text)" }}>{agent.name}</span>
+              <Tag variant="blue">{agent.strategy}</Tag>
+              <Tag variant={
+                agent.risk_tolerance === "HIGH" ? "red" :
+                agent.risk_tolerance === "LOW"  ? "green" : "yellow"
+              }>
+                {agent.risk_tolerance} risk
+              </Tag>
+              {agent.on_chain_id && (
+                <span style={{
+                  display: "inline-flex", alignItems: "center", gap: 5,
+                  padding: "2px 8px", borderRadius: 99,
+                  background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)",
+                  ...G.mono, fontSize: 9, fontWeight: 600,
+                  color: "var(--green)", textTransform: "uppercase", letterSpacing: "0.08em",
+                }}>
+                  <span style={{
+                    width: 5, height: 5, borderRadius: "50%",
+                    background: "var(--green)", animation: "pdot 2s ease-in-out infinite",
+                    display: "inline-block",
+                  }} />
+                  ⛓#{agent.on_chain_id}
                 </span>
-              </span>
+              )}
+            </div>
+            {stats ? (
+              <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                {[
+                  { label: "PnL",   val: `$${stats.total_pnl?.toFixed(4)}`, color: stats.total_pnl >= 0 ? "var(--green)" : "var(--red)" },
+                  { label: "Trust", val: `${stats.trust_score?.toFixed(0)}/100`, color: stats.trust_score >= 60 ? "var(--green)" : "var(--yellow)" },
+                  { label: "Trades", val: stats.total_trades, color: "var(--text)" },
+                  { label: "Win",   val: `${stats.win_rate?.toFixed(1)}%`, color: "var(--text)" },
+                  ...(onChainDaily ? [{
+                    label: "Chain Loss",
+                    val: `$${(onChainDaily.totalLossUsd / 100).toFixed(2)}`,
+                    color: onChainDaily.totalLossUsd / 100 > 500 ? "var(--red)" :
+                           onChainDaily.totalLossUsd / 100 > 100 ? "var(--yellow)" : "var(--green)",
+                  }] : []),
+                ].map(({ label, val, color }) => (
+                  <div key={label} style={{ textAlign: "center" }}>
+                    <p style={G.metricLabel}>{label}</p>
+                    <p style={{ ...G.mono, fontSize: 13, fontWeight: 600, color, marginTop: 2 }}>{val}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <Spinner size={3} />
             )}
           </div>
-        ) : (
-          <Spinner size={3} />
-        )}
-      </Card>
-
-      <SectionTitle>Voice AI Trader</SectionTitle>
-
-      {/* Input + controls */}
-      <Card>
-        <div className="flex gap-2">
-          <input
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !loading && send()}
-            placeholder='Try: "Buy ETH now" or "What is my PnL?"'
-            className="flex-1 bg-bg border border-border rounded px-3 py-2 text-sm mono text-text placeholder:text-dim focus:outline-none focus:border-muted"
-          />
-
-          <button
-            onClick={toggleMic}
-            disabled={loading || executing}
-            title={SpeechRecognition ? (listening ? "Stop listening" : "Voice input") : "Not supported in this browser"}
-            className={`px-3 py-2 rounded border mono text-xs transition-colors disabled:opacity-40 ${
-              listening
-                ? "bg-red/10 text-red border-red/20 pulse"
-                : "bg-muted text-dim border-border hover:text-text"
-            }`}
-          >
-            {listening ? "🎙 Stop" : "🎙"}
-          </button>
-
-          <ActionBtn onClick={() => send()} loading={loading} disabled={!input.trim() || executing}>
-            Send
-          </ActionBtn>
         </div>
+      </section>
 
-        {/* TTS controls */}
-        <div className="flex items-center gap-3 mt-3 flex-wrap">
-          <button
-            onClick={() => { setTtsEnabled((v) => !v); if (speaking) stop(); }}
-            className={`text-xs mono px-2 py-1 rounded border transition-colors ${
-              ttsEnabled
-                ? "border-green/30 bg-green/10 text-green"
-                : "border-border bg-muted text-dim"
-            }`}
-            title="Toggle text-to-speech"
-          >
-            {ttsEnabled ? "🔊 Voice On" : "🔇 Voice Off"}
-          </button>
+      {/* ════════════════════════════════════════════════════
+          VOICE COMMAND INPUT
+      ════════════════════════════════════════════════════ */}
+      <section>
+        <span style={G.label}>Voice Interface</span>
+        <h1 style={G.h2}>Voice AI Trader</h1>
 
-          {speaking && (
-            <button
-              onClick={stop}
-              className="text-xs mono px-2 py-1 rounded border border-red/30 bg-red/10 text-red transition-colors"
-            >
-              ⏹ Stop Speaking
-            </button>
-          )}
-
-          {speaking && (
-            <span className="text-xs mono text-green flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-green inline-block pulse" />
-              Speaking...
-            </span>
-          )}
-
-          {voices.length > 1 && ttsEnabled && (
-            <select
-              value={ttsVoice?.name || ""}
-              onChange={(e) => {
-                const v = voices.find((x) => x.name === e.target.value);
-                if (v) setTtsVoice(v);
+        <div style={G.card}>
+          {/* Input row */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <input
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && !loading && send()}
+              placeholder='Try: "Buy ETH now" or "What is my PnL?"'
+              style={{
+                flex: 1, padding: "10px 14px",
+                borderRadius: 10, border: "1px solid rgba(0,191,255,0.2)",
+                background: "rgba(0,0,0,0.45)", color: "var(--text2)",
+                ...G.mono, fontSize: 12,
+                outline: "none",
               }}
-              className="text-xs mono bg-bg border border-border rounded px-2 py-1 text-dim focus:outline-none"
-              title="Select TTS voice"
+            />
+
+            <button
+              onClick={toggleMic}
+              disabled={loading || executing}
+              title={SpeechRecognition ? (listening ? "Stop listening" : "Voice input") : "Not supported"}
+              style={{
+                padding: "10px 14px", borderRadius: 10,
+                border: listening
+                  ? "1px solid rgba(239,68,68,0.4)"
+                  : "1px solid rgba(0,191,255,0.2)",
+                background: listening
+                  ? "rgba(239,68,68,0.15)"
+                  : "rgba(0,0,0,0.45)",
+                color: listening ? "var(--red)" : "var(--neon-blue)",
+                ...G.mono, fontSize: 12, fontWeight: 600,
+                cursor: loading || executing ? "not-allowed" : "pointer",
+                opacity: loading || executing ? 0.4 : 1,
+                transition: "all 0.15s",
+                animation: listening ? "pdot 1s ease-in-out infinite" : "none",
+              }}
             >
-              {voices
-                .filter((v) => v.lang.startsWith("en"))
-                .map((v) => (
-                  <option key={v.name} value={v.name}>
-                    {v.name}
-                  </option>
-                ))}
-            </select>
+              {listening ? "🎙 Stop" : "🎙"}
+            </button>
+
+            <button
+              onClick={() => send()}
+              disabled={!input.trim() || loading || executing}
+              style={{
+                ...G.mono, fontSize: 12, fontWeight: 700,
+                padding: "10px 20px", borderRadius: 10,
+                border: "1px solid rgba(0,255,136,0.4)",
+                background: "rgba(0,255,136,0.1)",
+                color: "var(--neon-green)",
+                cursor: !input.trim() || loading || executing ? "not-allowed" : "pointer",
+                opacity: !input.trim() || loading || executing ? 0.5 : 1,
+                transition: "all 0.15s",
+              }}
+            >
+              {loading ? "Sending…" : "⚡ Send"}
+            </button>
+          </div>
+
+          {/* TTS controls */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+            <button
+              onClick={() => { setTtsEnabled((v) => !v); if (speaking) stop(); }}
+              style={{
+                ...G.mono, fontSize: 10, fontWeight: 600,
+                padding: "5px 12px", borderRadius: 8,
+                border: ttsEnabled ? "1px solid rgba(0,255,136,0.3)" : "1px solid var(--border)",
+                background: ttsEnabled ? "rgba(0,255,136,0.1)" : "rgba(0,0,0,0.3)",
+                color: ttsEnabled ? "var(--neon-green)" : "var(--dim)",
+                cursor: "pointer", transition: "all 0.15s",
+              }}
+            >
+              {ttsEnabled ? "🔊 Voice On" : "🔇 Voice Off"}
+            </button>
+
+            {speaking && (
+              <button
+                onClick={stop}
+                style={{
+                  ...G.mono, fontSize: 10, fontWeight: 600,
+                  padding: "5px 12px", borderRadius: 8,
+                  border: "1px solid rgba(239,68,68,0.3)",
+                  background: "rgba(239,68,68,0.1)",
+                  color: "var(--red)", cursor: "pointer",
+                }}
+              >
+                ⏹ Stop Speaking
+              </button>
+            )}
+
+            {speaking && (
+              <span style={{ ...G.mono, fontSize: 10, color: "var(--neon-green)", display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{
+                  width: 6, height: 6, borderRadius: "50%",
+                  background: "var(--neon-green)", display: "inline-block",
+                  animation: "pdot 1s ease-in-out infinite",
+                }} />
+                Speaking...
+              </span>
+            )}
+
+            {voices.length > 1 && ttsEnabled && (
+              <select
+                value={ttsVoice?.name || ""}
+                onChange={(e) => {
+                  const v = voices.find((x) => x.name === e.target.value);
+                  if (v) setTtsVoice(v);
+                }}
+                style={{
+                  ...G.mono, fontSize: 10,
+                  padding: "5px 10px", borderRadius: 8,
+                  border: "1px solid rgba(0,191,255,0.2)",
+                  background: "rgba(0,0,0,0.45)", color: "var(--dim)",
+                  outline: "none",
+                }}
+              >
+                {voices
+                  .filter((v) => v.lang.startsWith("en"))
+                  .map((v) => (
+                    <option key={v.name} value={v.name}>
+                      {v.name}
+                    </option>
+                  ))}
+              </select>
+            )}
+          </div>
+
+          {listening && (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 6,
+              padding: "8px 14px", borderRadius: 10,
+              border: "1px solid rgba(239,68,68,0.3)", background: "rgba(239,68,68,0.06)",
+              marginBottom: 12,
+            }}>
+              <span style={{
+                width: 6, height: 6, borderRadius: "50%",
+                background: "var(--red)", display: "inline-block",
+                animation: "pdot 1s ease-in-out infinite",
+              }} />
+              <span style={{ ...G.mono, fontSize: 11, color: "var(--red)" }}>
+                Listening… speak now
+              </span>
+            </div>
+          )}
+
+          {/* Quick examples */}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {EXAMPLES.map((ex) => (
+              <button
+                key={ex}
+                onClick={() => send(ex)}
+                disabled={loading || executing}
+                style={{
+                  ...G.mono, fontSize: 10, padding: "5px 12px",
+                  borderRadius: 8,
+                  border: "1px solid rgba(0,191,255,0.15)",
+                  background: "rgba(0,0,0,0.3)",
+                  color: "var(--dim)",
+                  cursor: loading || executing ? "not-allowed" : "pointer",
+                  opacity: loading || executing ? 0.4 : 1,
+                  transition: "all 0.15s",
+                }}
+                onMouseEnter={(e) => { e.target.style.color = "var(--neon-blue)"; e.target.style.borderColor = "rgba(0,191,255,0.4)"; }}
+                onMouseLeave={(e) => { e.target.style.color = "var(--dim)"; e.target.style.borderColor = "rgba(0,191,255,0.15)"; }}
+              >
+                {ex}
+              </button>
+            ))}
+          </div>
+
+          {error && (
+            <div style={{
+              marginTop: 12, padding: "10px 14px", borderRadius: 10,
+              border: "1px solid rgba(255,68,68,0.3)", background: "rgba(255,68,68,0.06)",
+            }}>
+              <p style={{ ...G.mono, fontSize: 11, color: "#FF4444" }}>{error}</p>
+            </div>
           )}
         </div>
+      </section>
 
-        {listening && (
-          <p className="text-xs mono text-red mt-2 flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-red inline-block pulse" />
-            Listening… speak now
-          </p>
-        )}
-
-        {/* Quick examples */}
-        <div className="flex flex-wrap gap-1.5 mt-3">
-          {EXAMPLES.map((ex) => (
-            <button
-              key={ex}
-              onClick={() => send(ex)}
-              disabled={loading || executing}
-              className="text-xs px-2 py-1 rounded border border-border text-dim hover:text-text hover:border-muted mono transition-colors disabled:opacity-40"
-            >
-              {ex}
-            </button>
-          ))}
-        </div>
-
-        {error && <p className="text-xs text-red mono mt-2">{error}</p>}
-      </Card>
-
-      {/* Loading */}
+      {/* ════════════════════════════════════════════════════
+          LOADING INDICATOR
+      ════════════════════════════════════════════════════ */}
       {loading && (
-        <div className="flex items-center gap-2 text-xs mono text-dim">
-          <Spinner size={3} />
-          <span>Processing your command...</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "center", padding: "12px 0" }}>
+          <Spinner size={4} />
+          <span style={{ ...G.mono, fontSize: 11, color: "var(--dim)" }}>Processing your command...</span>
         </div>
       )}
 
-      {/* CHANGE: Execution pipeline status — replaces the single sigStatus card.
-          Shows each on-chain step independently so the user knows exactly where
-          in the flow they are. Only visible once execution starts. */}
-      {executing && (
-        <Card>
-          <p className="text-xs text-dim mono font-semibold mb-3">Execution Pipeline</p>
-          <div className="space-y-2">
-            {[
-              { key: "sig",        label: "MetaMask Approval",       hint: "Sign to confirm intent — no gas required" },
-              { key: "riskrouter", label: "RiskRouter On-Chain TX",  hint: "EIP-712 sign + submit trade — gas required" },
-              { key: "validation", label: "Validation Record",       hint: "Store audit proof on-chain — gas required" },
-            ].map(({ key, label, hint }) => {
-              const st = chainStep[key];
-              const dot =
-                st === "done"    ? "bg-green" :
-                st === "error"   ? "bg-red"   :
-                st === "pending" ? "bg-yellow animate-pulse" :
-                                   "bg-muted";
-              const text =
-                st === "done"    ? "text-green"  :
-                st === "error"   ? "text-red"    :
-                st === "pending" ? "text-yellow" :
-                                   "text-dim";
-              return (
-                <div key={key} className="flex items-center gap-3">
-                  <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${dot} transition-all`} />
-                  <div>
-                    <p className={`text-xs mono ${text}`}>{label}</p>
-                    {st === "pending" && (
-                      <p className="text-[10px] mono text-dim">{hint}</p>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+      {/* ════════════════════════════════════════════════════
+          EXECUTION PIPELINE (Step Bar)
+      ════════════════════════════════════════════════════ */}
+      {showStepBar && (
+        <div style={G.card}>
+          <span style={G.label}>Execution Pipeline</span>
+          <StepBar steps={chainStep} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 6 }}>
+            {chainStep.sig === "pending" && (
+              <p style={{ ...G.mono, fontSize: 11, color: "#FFB800" }}>
+                🦊 MetaMask: Sign to confirm intent — no gas required
+              </p>
+            )}
+            {chainStep.riskrouter === "pending" && (
+              <p style={{ ...G.mono, fontSize: 11, color: "#FFB800" }}>
+                ⛓ MetaMask: Approve RiskRouter transaction — gas fee required
+              </p>
+            )}
+            {chainStep.validation === "pending" && (
+              <p style={{ ...G.mono, fontSize: 11, color: "#FFB800" }}>
+                📋 MetaMask: Sign & store validation record on-chain — gas fee required
+              </p>
+            )}
           </div>
-        </Card>
+        </div>
       )}
 
-      {/* MetaMask waiting card — kept for audio feedback continuity */}
+      {/* ════════════════════════════════════════════════════
+          MetaMask Waiting Card
+      ════════════════════════════════════════════════════ */}
       {sigWaiting && (
-        <Card className="flex items-center gap-4 border-yellow/20">
-          <div className="w-8 h-8 rounded-full bg-yellow/10 flex items-center justify-center text-lg flex-shrink-0">
+        <ACard ac="#FFB800" style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <div style={{
+            width: 44, height: 44, borderRadius: 12,
+            background: "rgba(255,184,0,0.1)", display: "flex",
+            alignItems: "center", justifyContent: "center",
+            fontSize: 22, flexShrink: 0,
+          }}>
             🦊
           </div>
           <div>
-            <p className="text-sm mono font-medium text-yellow">MetaMask Signature Required</p>
-            <p className="text-xs text-dim mono mt-0.5">
+            <p style={{ fontFamily: "'Syne', sans-serif", fontWeight: 800, fontSize: 14, color: "#FFB800", margin: 0 }}>
+              MetaMask Signature Required
+            </p>
+            <p style={{ ...G.mono, fontSize: 10, color: "var(--dim)", marginTop: 3 }}>
               Check your MetaMask popup. Sign to approve this trade. Free — no ETH required.
             </p>
           </div>
-        </Card>
+        </ACard>
       )}
 
-      {/* AI Response */}
+      {/* ════════════════════════════════════════════════════
+          AI RESPONSE
+      ════════════════════════════════════════════════════ */}
       {response && (
-        <Card>
-          <div className="flex items-center gap-2 mb-3 flex-wrap">
-            <Badge variant="blue">{response.intent}</Badge>
-            {response.action && (
-              <Badge variant={actionColor(response.action)}>{response.action}</Badge>
-            )}
-            {response.token && (
-              <span className="text-xs mono text-dim capitalize">
-                {response.token.replace(/-/g, " ")}
-              </span>
-            )}
-            {sigSigned && <Badge variant="green">MetaMask ✓</Badge>}
-            {/* CHANGE: show RiskRouter approval badge once done */}
-            {chainStep.riskrouter === "done" && agent.on_chain_id && (
-              <Badge variant="green">⛓ RiskRouter ✓</Badge>
-            )}
+        <section>
+          <span style={G.label}>AI Response</span>
+          <div style={G.card}>
+            {/* Intent + action badges */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+              <Tag variant="blue">{response.intent}</Tag>
+              {response.action && (
+                <Tag variant={actionColor(response.action)}>{response.action}</Tag>
+              )}
+              {response.token && (
+                <span style={{ ...G.mono, fontSize: 12, color: "var(--dim)", textTransform: "capitalize" }}>
+                  {response.token.replace(/-/g, " ")}
+                </span>
+              )}
+              {chainStep.sig === "done" && <Tag variant="green">MetaMask ✓</Tag>}
+              {chainStep.riskrouter === "done" && agent.on_chain_id && (
+                <Tag variant="green">⛓ RiskRouter ✓</Tag>
+              )}
 
-            <button
-              onClick={() => speak(response.explanation)}
-              disabled={speaking}
-              className="ml-auto text-xs mono px-2 py-0.5 rounded border border-border text-dim hover:text-text transition-colors disabled:opacity-40"
-              title="Replay audio"
-            >
-              🔊 Replay
-            </button>
-          </div>
+              <button
+                onClick={() => speak(response.explanation)}
+                disabled={speaking}
+                style={{
+                  marginLeft: "auto", ...G.mono, fontSize: 10, fontWeight: 600,
+                  padding: "5px 12px", borderRadius: 8,
+                  border: "1px solid rgba(0,191,255,0.2)",
+                  background: "rgba(0,0,0,0.3)",
+                  color: "var(--neon-blue)",
+                  cursor: speaking ? "not-allowed" : "pointer",
+                  opacity: speaking ? 0.4 : 1, transition: "all 0.15s",
+                }}
+              >
+                🔊 Replay
+              </button>
+            </div>
 
-          <p className="text-sm text-text leading-relaxed mb-3">{response.explanation}</p>
+            {/* Explanation text */}
+            <p style={{ fontSize: 13, color: "var(--text2)", lineHeight: 1.6, marginBottom: 16 }}>
+              {response.explanation}
+            </p>
 
-          {response.decision && (
-            <div className="bg-bg border border-border rounded p-3 space-y-2">
-              <p className="text-xs text-dim mono font-semibold">AI Analysis</p>
-              <div className="grid grid-cols-2 gap-1 text-xs mono">
-                {[
-                  {
-                    label: "Action",
-                    val: <Badge variant={actionColor(response.decision.action)}>{response.decision.action}</Badge>,
-                  },
-                  { label: "Confidence", val: `${response.decision.confidence}%` },
-                  {
-                    label: "Risk Level",
-                    val: response.decision.risk_level,
-                    color:
-                      response.decision.risk_level === "HIGH" ? "text-red" :
-                      response.decision.risk_level === "LOW"  ? "text-green" : "text-yellow",
-                  },
-                  { label: "Amount", val: `$${response.decision.amount_usd}` },
-                ].map(({ label, val, color }) => (
-                  <div
-                    key={label}
-                    className="flex justify-between bg-surface rounded p-1.5 border border-border/50"
-                  >
-                    <span className="text-dim">{label}</span>
-                    {typeof val === "string"
-                      ? <span className={color || "text-text"}>{val}</span>
-                      : val}
-                  </div>
-                ))}
-              </div>
-
-              {response.decision.indicators && (
-                <div className="grid grid-cols-3 sm:grid-cols-5 gap-1 text-xs mono mt-1">
+            {/* AI Decision details */}
+            {response.decision && (
+              <div style={{
+                background: "rgba(0,0,0,0.3)", border: "1px solid rgba(0,191,255,0.1)",
+                borderRadius: 12, padding: 16,
+              }}>
+                <p style={{ ...G.metricLabel, marginBottom: 12 }}>AI Analysis</p>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8, marginBottom: 12 }}>
                   {[
                     {
-                      label: "RSI",
-                      val:   response.decision.indicators.rsi?.toFixed(1),
-                      color: response.decision.indicators.rsi < 30 ? "text-green"
-                           : response.decision.indicators.rsi > 70 ? "text-red" : "",
+                      label: "Action",
+                      val: response.decision.action,
+                      isTag: true,
                     },
+                    { label: "Confidence", val: `${response.decision.confidence}%` },
                     {
-                      label: "MA7",
-                      val:   response.decision.indicators.ma_7 != null
-                               ? `$${Number(response.decision.indicators.ma_7).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
-                               : null,
+                      label: "Risk Level",
+                      val: response.decision.risk_level,
+                      color:
+                        response.decision.risk_level === "HIGH" ? "var(--red)" :
+                        response.decision.risk_level === "LOW"  ? "var(--green)" : "var(--yellow)",
                     },
-                    {
-                      label: "MA25",
-                      val:   response.decision.indicators.ma_25 != null
-                               ? `$${Number(response.decision.indicators.ma_25).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
-                               : null,
-                    },
-                    {
-                      label: "Sentiment",
-                      val:   response.decision.indicators.sentiment?.toFixed(3),
-                      color: response.decision.indicators.sentiment >  0.3 ? "text-green"
-                           : response.decision.indicators.sentiment < -0.3 ? "text-red" : "",
-                    },
-                    {
-                      label: "24h Δ",
-                      val:   response.decision.indicators.price_change_24h != null
-                               ? `${response.decision.indicators.price_change_24h >= 0 ? "+" : ""}${response.decision.indicators.price_change_24h?.toFixed(2)}%`
-                               : null,
-                      color: (response.decision.indicators.price_change_24h ?? 0) >= 0
-                               ? "text-green" : "text-red",
-                    },
-                  ].map(({ label, val, color }) => (
-                    <div key={label} className="bg-surface rounded p-1.5 border border-border/50">
-                      <p className="text-dim">{label}</p>
-                      <p className={`font-medium ${color || "text-text"}`}>{val ?? "—"}</p>
+                    { label: "Amount", val: `$${response.decision.amount_usd}` },
+                  ].map(({ label, val, color, isTag }) => (
+                    <div
+                      key={label}
+                      style={{
+                        display: "flex", justifyContent: "space-between", alignItems: "center",
+                        background: "rgba(0,0,0,0.2)", borderRadius: 8,
+                        padding: "8px 12px", border: "1px solid rgba(0,191,255,0.08)",
+                      }}
+                    >
+                      <span style={{ ...G.mono, fontSize: 10, color: "var(--dim)" }}>{label}</span>
+                      {isTag
+                        ? <Tag variant={actionColor(val)}>{val}</Tag>
+                        : <span style={{ ...G.mono, fontSize: 12, fontWeight: 600, color: color || "var(--text)" }}>{val}</span>
+                      }
                     </div>
                   ))}
                 </div>
-              )}
 
-              {response.decision.indicators?.signals &&
-                Object.keys(response.decision.indicators.signals).length > 0 && (
-                <div className="pt-2 border-t border-border mt-1">
-                  <p className="text-xs text-dim mono mb-1">Signals</p>
-                  <div className="flex flex-wrap gap-1">
-                    {Object.entries(response.decision.indicators.signals).map(([k, v]) => (
-                      <span key={k} className="text-xs mono px-2 py-0.5 rounded bg-muted text-dim">
-                        {v}
-                      </span>
+                {/* Indicators */}
+                {response.decision.indicators && (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: 6, marginBottom: 8 }}>
+                    {[
+                      {
+                        label: "RSI",
+                        val:   response.decision.indicators.rsi?.toFixed(1),
+                        color: response.decision.indicators.rsi < 30 ? "var(--green)"
+                             : response.decision.indicators.rsi > 70 ? "var(--red)" : null,
+                      },
+                      {
+                        label: "MA7",
+                        val:   response.decision.indicators.ma_7 != null
+                                 ? `$${Number(response.decision.indicators.ma_7).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+                                 : null,
+                      },
+                      {
+                        label: "MA25",
+                        val:   response.decision.indicators.ma_25 != null
+                                 ? `$${Number(response.decision.indicators.ma_25).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+                                 : null,
+                      },
+                      {
+                        label: "Sentiment",
+                        val:   response.decision.indicators.sentiment?.toFixed(3),
+                        color: response.decision.indicators.sentiment >  0.3 ? "var(--green)"
+                             : response.decision.indicators.sentiment < -0.3 ? "var(--red)" : null,
+                      },
+                      {
+                        label: "24h Δ",
+                        val:   response.decision.indicators.price_change_24h != null
+                                 ? `${response.decision.indicators.price_change_24h >= 0 ? "+" : ""}${response.decision.indicators.price_change_24h?.toFixed(2)}%`
+                                 : null,
+                        color: (response.decision.indicators.price_change_24h ?? 0) >= 0
+                                 ? "var(--green)" : "var(--red)",
+                      },
+                    ].map(({ label, val, color }) => (
+                      <div key={label} style={{
+                        background: "rgba(0,0,0,0.2)", borderRadius: 8,
+                        padding: "8px 10px", border: "1px solid rgba(0,191,255,0.08)",
+                      }}>
+                        <p style={{ ...G.mono, fontSize: 9, color: "var(--dim)", textTransform: "uppercase", marginBottom: 3 }}>{label}</p>
+                        <p style={{ ...G.mono, fontSize: 12, fontWeight: 600, color: color || "var(--text)" }}>{val ?? "—"}</p>
+                      </div>
                     ))}
                   </div>
-                </div>
-              )}
+                )}
 
-              {response.intent === "trade" && response.decision.action !== "HOLD" && (
-                <div className="pt-2 border-t border-border mt-2">
-                  <ActionBtn
-                    onClick={executeVoiceTrade}
-                    loading={executing}
-                    disabled={loading}
-                    variant="primary"
-                  >
-                    ⚡ Execute This Trade
-                  </ActionBtn>
-                  <p className="text-xs text-dim mono mt-1">
-                    {response.decision.action} {response.token?.toUpperCase()} ·
-                    ${response.decision.amount_usd} · Requires MetaMask signature
-                    {agent.on_chain_id && " + RiskRouter TX"}
-                  </p>
+                {/* Signals */}
+                {response.decision.indicators?.signals &&
+                  Object.keys(response.decision.indicators.signals).length > 0 && (
+                  <div style={{ borderTop: "1px solid rgba(0,191,255,0.1)", paddingTop: 10, marginTop: 6 }}>
+                    <p style={{ ...G.mono, fontSize: 9, color: "var(--dim)", textTransform: "uppercase", marginBottom: 6 }}>Signals</p>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                      {Object.entries(response.decision.indicators.signals).map(([k, v]) => (
+                        <span key={k} style={{
+                          ...G.mono, fontSize: 10, padding: "3px 10px",
+                          borderRadius: 6, background: "rgba(0,191,255,0.08)",
+                          color: "var(--dim)", border: "1px solid rgba(0,191,255,0.1)",
+                        }}>
+                          {v}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Execute button */}
+                {response.intent === "trade" && response.decision.action !== "HOLD" && (
+                  <div style={{ borderTop: "1px solid rgba(0,191,255,0.1)", paddingTop: 14, marginTop: 12 }}>
+                    <button
+                      onClick={executeVoiceTrade}
+                      disabled={executing || loading}
+                      style={{
+                        ...G.mono, fontSize: 12, fontWeight: 700,
+                        padding: "10px 24px", borderRadius: 10,
+                        border: "1px solid rgba(0,191,255,0.4)",
+                        background: executing
+                          ? "rgba(0,191,255,0.05)"
+                          : "linear-gradient(135deg,rgba(0,191,255,0.3),rgba(0,255,136,0.2))",
+                        color: "var(--neon-blue)",
+                        cursor: executing || loading ? "not-allowed" : "pointer",
+                        opacity: executing || loading ? 0.5 : 1,
+                        transition: "all 0.15s",
+                      }}
+                    >
+                      {executing ? "Executing…" : "🚀 Execute This Trade"}
+                    </button>
+                    <p style={{ ...G.mono, fontSize: 10, color: "var(--dim)", marginTop: 6 }}>
+                      {response.decision.action} {response.token?.toUpperCase()} ·
+                      ${response.decision.amount_usd} · Requires MetaMask signature
+                      {agent.on_chain_id && " + RiskRouter TX"}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {executing && !showStepBar && (
+        <div style={{ display: "flex", justifyContent: "center", padding: "20px 0" }}><Spinner size={6} /></div>
+      )}
+
+      {/* ════════════════════════════════════════════════════
+          TRADE RESULT
+      ════════════════════════════════════════════════════ */}
+      {tradeResult && (
+        <section>
+          <span style={G.label}>Execution Result</span>
+          <div style={G.card}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+              <Tag variant={
+                tradeResult.status === "EXECUTED" ? "green" :
+                tradeResult.status === "REJECTED" ? "red" : "yellow"
+              }>
+                {tradeResult.status}
+              </Tag>
+              <Tag variant={actionColor(tradeResult.action)}>{tradeResult.action}</Tag>
+              <span style={{ ...G.mono, fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{tradeResult.token_pair}</span>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8, marginBottom: 12 }}>
+              {[
+                { label: "Amount",     val: `$${tradeResult.amount_usd}` },
+                {
+                  label: "PnL",
+                  val:   tradeResult.pnl != null ? `$${tradeResult.pnl.toFixed(4)}` : "—",
+                  color: (tradeResult.pnl ?? 0) >= 0 ? "var(--green)" : "var(--red)",
+                },
+                { label: "Risk Check", val: tradeResult.risk_check?.toUpperCase() },
+                { label: "Confidence", val: `${tradeResult.confidence}%` },
+              ].map(({ label, val, color }) => (
+                <div key={label} style={{
+                  background: "rgba(0,0,0,0.2)", borderRadius: 8,
+                  padding: "8px 12px", border: "1px solid rgba(0,191,255,0.08)",
+                }}>
+                  <p style={{ ...G.mono, fontSize: 9, color: "var(--dim)", textTransform: "uppercase", marginBottom: 3 }}>{label}</p>
+                  <p style={{ ...G.mono, fontSize: 13, fontWeight: 600, color: color || "var(--text)" }}>{val}</p>
                 </div>
+              ))}
+            </div>
+
+            {/* On-chain badges */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              {tradeResult.on_chain_id && (
+                <>
+                  <span style={{
+                    ...G.mono, fontSize: 10, padding: "3px 10px", borderRadius: 6,
+                    background: "rgba(0,255,136,0.1)", color: "var(--neon-green)",
+                    border: "1px solid rgba(0,255,136,0.3)",
+                  }}>
+                    ⛓ RiskRouter Approved
+                  </span>
+                  <a
+                    href={`https://sepolia.etherscan.io/tx/${tradeResult.on_chain_id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ ...G.mono, fontSize: 10, color: "var(--neon-blue)", textDecoration: "none" }}
+                    onMouseEnter={(e) => e.target.style.textDecoration = "underline"}
+                    onMouseLeave={(e) => e.target.style.textDecoration = "none"}
+                  >
+                    {tradeResult.on_chain_id.startsWith("0x")
+                      ? `${tradeResult.on_chain_id.slice(0, 22)}…`
+                      : tradeResult.on_chain_id}
+                  </a>
+                </>
+              )}
+              {chainStep.validation === "done" && agent.on_chain_id && (
+                <span style={{
+                  ...G.mono, fontSize: 10, padding: "3px 10px", borderRadius: 6,
+                  background: "rgba(0,255,136,0.1)", color: "var(--neon-green)",
+                  border: "1px solid rgba(0,255,136,0.3)",
+                }}>
+                  📋 Validation stored on-chain
+                </span>
+              )}
+              {chainStep.validation === "error" && (
+                <span style={{
+                  ...G.mono, fontSize: 10, padding: "3px 10px", borderRadius: 6,
+                  background: "rgba(255,184,0,0.1)", color: "#FFB800",
+                  border: "1px solid rgba(255,184,0,0.3)",
+                }}>
+                  ⚠ Validation store failed (trade executed successfully)
+                </span>
               )}
             </div>
-          )}
-        </Card>
+          </div>
+        </section>
       )}
 
-      {executing && chainStep.sig === null && (
-        <div className="flex justify-center py-6"><Spinner size={6} /></div>
-      )}
-
-      {/* Trade result */}
-      {tradeResult && (
-        <Card>
-          <SectionTitle>Trade Executed</SectionTitle>
-          <div className="flex items-center gap-3 mb-3 flex-wrap">
-            <Badge variant={
-              tradeResult.status === "EXECUTED" ? "green" :
-              tradeResult.status === "REJECTED" ? "red" : "yellow"
-            }>
-              {tradeResult.status}
-            </Badge>
-            <Badge variant={actionColor(tradeResult.action)}>{tradeResult.action}</Badge>
-            <span className="mono text-sm">{tradeResult.token_pair}</span>
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs mono">
-            {[
-              { label: "Amount",     val: `$${tradeResult.amount_usd}` },
-              {
-                label: "PnL",
-                val:   tradeResult.pnl != null ? `$${tradeResult.pnl.toFixed(4)}` : "—",
-                color: (tradeResult.pnl ?? 0) >= 0 ? "text-green" : "text-red",
-              },
-              { label: "Risk Check", val: tradeResult.risk_check?.toUpperCase() },
-              { label: "Confidence", val: `${tradeResult.confidence}%` },
-            ].map(({ label, val, color }) => (
-              <div key={label} className="bg-bg border border-border rounded p-2">
-                <p className="text-dim">{label}</p>
-                <p className={`font-medium ${color || ""}`}>{val}</p>
-              </div>
-            ))}
-          </div>
-
-          {/* CHANGE: RiskRouter on-chain badge + validation badge */}
-          <div className="mt-2 flex items-center gap-2 flex-wrap">
-            {tradeResult.on_chain_id && (
-              <>
-                <span className="text-xs mono px-1.5 py-0.5 rounded bg-green/10 text-green border border-green/20">
-                  ⛓ RiskRouter Approved
-                </span>
-                <a
-                  href={`https://sepolia.etherscan.io/tx/${tradeResult.on_chain_id}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs text-blue hover:underline mono"
-                >
-                  {tradeResult.on_chain_id.startsWith("0x")
-                    ? `${tradeResult.on_chain_id.slice(0, 22)}…`
-                    : tradeResult.on_chain_id}
-                </a>
-              </>
-            )}
-            {chainStep.validation === "done" && agent.on_chain_id && (
-              <span className="text-xs mono px-1.5 py-0.5 rounded bg-green/10 text-green border border-green/20">
-                📋 Validation stored on-chain
-              </span>
-            )}
-            {chainStep.validation === "error" && (
-              <span className="text-xs mono px-1.5 py-0.5 rounded bg-yellow/10 text-yellow border border-yellow/20">
-                ⚠ Validation store failed (trade executed successfully)
-              </span>
-            )}
-          </div>
-        </Card>
-      )}
-
-      {/* Command history */}
+      {/* ════════════════════════════════════════════════════
+          COMMAND HISTORY
+      ════════════════════════════════════════════════════ */}
       {history.length > 0 && (
-        <div>
-          <SectionTitle>Command History</SectionTitle>
-          <div className="space-y-2">
+        <section>
+          <span style={G.label}>History</span>
+          <h2 style={{ ...G.h2, fontSize: "clamp(14px,2vw,20px)", marginBottom: 14 }}>Command History</h2>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {history.map((h, i) => (
               <div
                 key={i}
-                className="bg-surface border border-border rounded-lg px-3 py-2 flex items-start gap-3 cursor-pointer hover:border-muted transition-colors"
                 onClick={() => speak(h.r.explanation)}
                 title="Click to replay audio"
+                style={{
+                  display: "flex", alignItems: "flex-start", gap: 12,
+                  padding: "12px 16px", borderRadius: 12,
+                  background: "var(--card)", border: "1px solid var(--border)",
+                  cursor: "pointer", transition: "border-color 0.15s, transform 0.15s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = "rgba(0,191,255,0.3)";
+                  e.currentTarget.style.transform = "translateX(3px)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = "var(--border)";
+                  e.currentTarget.style.transform = "none";
+                }}
               >
-                <span className="text-xs text-dim mono flex-shrink-0 mt-0.5">{h.ts}</span>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs mono text-green">"{h.cmd}"</p>
-                  <p className="text-xs text-dim mono truncate mt-0.5">{h.r.explanation}</p>
+                <span style={{ ...G.mono, fontSize: 10, color: "var(--dim)", flexShrink: 0, marginTop: 2 }}>{h.ts}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{ ...G.mono, fontSize: 11, color: "var(--neon-green)", marginBottom: 2 }}>"{h.cmd}"</p>
+                  <p style={{
+                    ...G.mono, fontSize: 10, color: "var(--dim)",
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  }}>{h.r.explanation}</p>
                 </div>
-                <div className="flex items-center gap-1.5 flex-shrink-0">
-                  <Badge variant="blue">{h.r.intent}</Badge>
-                  <span className="text-dim text-xs" title="Replay">🔊</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                  <Tag variant="blue">{h.r.intent}</Tag>
+                  <span style={{ ...G.mono, fontSize: 12, color: "var(--dim)" }} title="Replay">🔊</span>
                 </div>
               </div>
             ))}
           </div>
-        </div>
+        </section>
       )}
+
+    </div>
     </div>
   );
 }
