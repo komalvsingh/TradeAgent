@@ -2,8 +2,11 @@ import React, { useState, useCallback } from "react";
 import { useAgent }     from "../context/AgentContext";
 import { useContracts } from "../context/ContractContext";
 import { useWallet }    from "../context/WalletContext";
-import { Card, SectionTitle, ActionBtn, Input } from "./UI";
-import { linkChainId } from "../utils/api"; // see note below
+import { linkChainId }  from "../utils/api";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Static data
+// ─────────────────────────────────────────────────────────────────────────────
 
 const STRATEGIES = [
   { value: "COMBINED",     label: "Combined (RSI + MA + Sentiment)" },
@@ -18,46 +21,417 @@ const RISK_LEVELS = [
   { value: "HIGH",   label: "High"   },
 ];
 
-// ── Step definitions ─────────────────────────────────────────────────────────
-const STEPS = [
+const STEP_DEFS = [
   { id: "contract", label: "AgentRegistry TX" },
   { id: "event",    label: "Get Agent ID"     },
   { id: "backend",  label: "Save to Backend"  },
   { id: "done",     label: "Ready"            },
 ];
 
-function StepBar({ steps }) {
+// ─────────────────────────────────────────────────────────────────────────────
+// Design tokens  (mirrors IdentityHub's inline style objects)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const T = {
+  mono: { fontFamily: "'JetBrains Mono', monospace" },
+
+  label: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    fontWeight: 600,
+    textTransform: "uppercase",
+    letterSpacing: "0.12em",
+    color: "var(--neon-green)",
+    marginBottom: 6,
+    display: "block",
+  },
+
+  card: {
+    background: "var(--card-glass-sm)",
+    border: "1px solid var(--border-glass)",
+    borderRadius: 16,
+    padding: "20px 24px",
+    backdropFilter: "blur(14px)",
+    boxShadow: "0 0 30px rgba(0,191,255,0.06)",
+  },
+
+  fieldLabel: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    fontWeight: 600,
+    textTransform: "uppercase",
+    letterSpacing: "0.1em",
+    color: "#6b7280",
+    marginBottom: 5,
+    display: "block",
+  },
+
+  input: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 13,
+    width: "100%",
+    padding: "9px 12px",
+    background: "rgba(255,255,255,0.04)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 10,
+    color: "var(--text)",
+    outline: "none",
+    transition: "border-color 0.2s, box-shadow 0.2s",
+  },
+
+  inputFocus: {
+    borderColor: "rgba(0,255,136,0.35)",
+    boxShadow: "0 0 0 3px rgba(0,255,136,0.08)",
+  },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Small primitives
+// ─────────────────────────────────────────────────────────────────────────────
+
+function Label({ children }) {
+  return <span style={T.label}>{children}</span>;
+}
+
+function FieldLabel({ children }) {
+  return <span style={T.fieldLabel}>{children}</span>;
+}
+
+function Field({ label, children }) {
   return (
-    <div className="flex items-center gap-0 w-full my-4">
-      {STEPS.map((s, i) => {
-        const st    = steps[s.id];
-        const dot   = st === "done"    ? "bg-green"
-                    : st === "error"   ? "bg-red"
-                    : st === "pending" ? "bg-yellow animate-pulse"
-                    :                    "bg-muted";
-        const label = st === "done"    ? "text-green"
-                    : st === "error"   ? "text-red"
-                    : st === "pending" ? "text-yellow"
-                    :                    "text-dim";
-        return (
-          <React.Fragment key={s.id}>
-            <div className="flex flex-col items-center min-w-[72px]">
-              <div className={`w-3 h-3 rounded-full transition-all ${dot}`} />
-              <span className={`text-[10px] mono mt-1 text-center leading-tight ${label}`}>
-                {s.label}
-              </span>
-            </div>
-            {i < STEPS.length - 1 && (
-              <div className="flex-1 h-px bg-border min-w-[8px] mb-3" />
-            )}
-          </React.Fragment>
-        );
-      })}
+    <div style={{ display: "flex", flexDirection: "column" }}>
+      <FieldLabel>{label}</FieldLabel>
+      {children}
     </div>
   );
 }
 
-// ── Main Component ───────────────────────────────────────────────────────────
+function StyledInput({ value, onChange, type = "text", placeholder, disabled, autoFocus }) {
+  const [focused, setFocused] = useState(false);
+  return (
+    <input
+      type={type}
+      value={value}
+      placeholder={placeholder}
+      disabled={disabled}
+      autoFocus={autoFocus}
+      onChange={(e) => onChange(e.target.value)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      style={{
+        ...T.input,
+        ...(focused ? T.inputFocus : {}),
+        opacity: disabled ? 0.5 : 1,
+        cursor: disabled ? "not-allowed" : "text",
+      }}
+    />
+  );
+}
+
+function StyledSelect({ value, onChange, options, disabled }) {
+  const [focused, setFocused] = useState(false);
+  return (
+    <select
+      value={value}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      style={{
+        ...T.input,
+        ...(focused ? T.inputFocus : {}),
+        opacity: disabled ? 0.5 : 1,
+        cursor: disabled ? "not-allowed" : "pointer",
+        appearance: "none",
+        backgroundImage:
+          "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236b7280' d='M6 8L1 3h10z'/%3E%3C/svg%3E\")",
+        backgroundRepeat: "no-repeat",
+        backgroundPosition: "right 12px center",
+        paddingRight: 32,
+      }}
+    >
+      {options.map((o) => (
+        <option key={o.value} value={o.value} style={{ background: "#1a1a2e" }}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Step progress bar  (mirrors IdentityHub's StepBar in IdentityGlobe section)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const STEP_COLORS = {
+  done:    { dot: "#00FF88", label: "#00FF88" },
+  pending: { dot: "#F5A623", label: "#F5A623" },
+  error:   { dot: "#E24B4A", label: "#E24B4A" },
+  null:    { dot: "rgba(255,255,255,0.12)", label: "#6b7280" },
+};
+
+function StepBar({ steps }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", width: "100%", margin: "16px 0 4px" }}>
+      {STEP_DEFS.map((s, i) => {
+        const st     = steps[s.id];
+        const colors = STEP_COLORS[st] ?? STEP_COLORS[null];
+        return (
+          <React.Fragment key={s.id}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", minWidth: 70 }}>
+              {/* Dot */}
+              <div style={{
+                width: 10, height: 10,
+                borderRadius: "50%",
+                background: colors.dot,
+                transition: "all 0.3s ease",
+                boxShadow: st === "done"    ? `0 0 8px ${colors.dot}80`
+                         : st === "pending" ? `0 0 8px ${colors.dot}60`
+                         : "none",
+                animation: st === "pending" ? "stepPulse 1.2s ease-in-out infinite" : "none",
+              }} />
+              {/* Label */}
+              <span style={{
+                ...T.mono,
+                fontSize: 9,
+                marginTop: 5,
+                textAlign: "center",
+                lineHeight: 1.3,
+                color: colors.label,
+                transition: "color 0.3s",
+              }}>
+                {s.label}
+              </span>
+            </div>
+
+            {i < STEP_DEFS.length - 1 && (
+              <div style={{
+                flex: 1,
+                height: 1,
+                background: steps[s.id] === "done"
+                  ? "rgba(0,255,136,0.3)"
+                  : "rgba(255,255,255,0.07)",
+                marginBottom: 14,
+                transition: "background 0.4s",
+                minWidth: 8,
+              }} />
+            )}
+          </React.Fragment>
+        );
+      })}
+
+      <style>{`
+        @keyframes stepPulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50%       { opacity: 0.45; transform: scale(0.75); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Buttons
+// ─────────────────────────────────────────────────────────────────────────────
+
+function PrimaryBtn({ onClick, loading, disabled, children }) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled || loading}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        ...T.mono,
+        width: "100%",
+        padding: "11px 20px",
+        fontSize: 13,
+        fontWeight: 700,
+        borderRadius: 12,
+        border: "1px solid rgba(0,255,136,0.4)",
+        background: hovered && !disabled && !loading
+          ? "rgba(0,255,136,0.18)"
+          : "rgba(0,255,136,0.1)",
+        color: (disabled || loading) ? "rgba(0,255,136,0.4)" : "var(--neon-green)",
+        cursor: (disabled || loading) ? "not-allowed" : "pointer",
+        transition: "all 0.2s",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 8,
+        letterSpacing: "0.04em",
+        boxShadow: hovered && !disabled && !loading
+          ? "0 0 20px rgba(0,255,136,0.15)"
+          : "none",
+      }}
+    >
+      {loading && <Spinner color="var(--neon-green)" />}
+      {children}
+    </button>
+  );
+}
+
+function SecondaryBtn({ onClick, disabled, children }) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        ...T.mono,
+        width: "100%",
+        padding: "10px 20px",
+        fontSize: 12,
+        fontWeight: 600,
+        borderRadius: 12,
+        border: "1px solid rgba(0,191,255,0.25)",
+        background: hovered ? "rgba(0,191,255,0.08)" : "transparent",
+        color: disabled ? "rgba(0,191,255,0.3)" : "var(--neon-blue)",
+        cursor: disabled ? "not-allowed" : "pointer",
+        transition: "all 0.2s",
+        letterSpacing: "0.04em",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Spinner
+// ─────────────────────────────────────────────────────────────────────────────
+
+function Spinner({ color = "var(--neon-green)", size = 14 }) {
+  return (
+    <>
+      <div style={{
+        width: size, height: size,
+        borderRadius: "50%",
+        border: `2px solid transparent`,
+        borderTopColor: color,
+        animation: "spin 0.7s linear infinite",
+        flexShrink: 0,
+      }} />
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Status message  (info / success / error)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const STATUS_STYLES = {
+  info: {
+    color: "#F5A623",
+    border: "1px solid rgba(245,166,35,0.2)",
+    background: "rgba(245,166,35,0.06)",
+  },
+  success: {
+    color: "#00FF88",
+    border: "1px solid rgba(0,255,136,0.2)",
+    background: "rgba(0,255,136,0.06)",
+  },
+  error: {
+    color: "#E24B4A",
+    border: "1px solid rgba(226,75,74,0.2)",
+    background: "rgba(226,75,74,0.06)",
+  },
+};
+
+function StatusMsg({ type = "info", children }) {
+  return (
+    <div style={{
+      ...T.mono,
+      ...STATUS_STYLES[type],
+      fontSize: 11,
+      lineHeight: 1.65,
+      padding: "10px 13px",
+      borderRadius: 10,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chain ID badge  (mirrors IdentityHub's "VERIFIED ON-CHAIN" pill)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ChainBadge({ agentId }) {
+  return (
+    <div style={{
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 6,
+      padding: "5px 12px",
+      borderRadius: 999,
+      background: "rgba(0,191,255,0.1)",
+      border: "1px solid rgba(0,191,255,0.3)",
+      ...T.mono,
+      fontSize: 10,
+      fontWeight: 700,
+      color: "var(--neon-blue)",
+    }}>
+      {/* Animated pulse dot */}
+      <span style={{
+        display: "inline-block",
+        width: 6, height: 6,
+        borderRadius: "50%",
+        background: "var(--neon-blue)",
+        boxShadow: "0 0 6px var(--neon-blue)",
+        animation: "chainPulse 2s ease-in-out infinite",
+      }} />
+      ⛓ On-chain Agent ID: #{agentId}
+      <style>{`
+        @keyframes chainPulse {
+          0%, 100% { opacity: 1; }
+          50%       { opacity: 0.4; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Success banner  (shown when done === "done")
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SuccessBanner() {
+  return (
+    <div style={{
+      ...T.mono,
+      textAlign: "center",
+      padding: "12px 16px",
+      borderRadius: 12,
+      background: "rgba(0,255,136,0.08)",
+      border: "1px solid rgba(0,255,136,0.25)",
+      fontSize: 12,
+      fontWeight: 700,
+      color: "var(--neon-green)",
+      letterSpacing: "0.06em",
+      boxShadow: "0 0 24px rgba(0,255,136,0.08)",
+    }}>
+      ✓ AGENT REGISTERED SUCCESSFULLY
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Divider
+// ─────────────────────────────────────────────────────────────────────────────
+
+function Divider() {
+  return <div style={{ height: 1, background: "rgba(255,255,255,0.06)", margin: "16px 0" }} />;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main component
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function RegisterAgent() {
   const { register }             = useAgent();
   const { registerAgentOnChain } = useContracts();
@@ -68,17 +442,14 @@ export default function RegisterAgent() {
   const [risk,     setRisk]     = useState("MEDIUM");
   const [maxTrade, setMaxTrade] = useState("500");
 
-  const [busy,      setBusy]    = useState(false);
-  const [error,     setError]   = useState(null);
-  const [statusMsg, setStatus]  = useState(null);
-  const [agentId,   setAgentId] = useState(null);
-  const [steps,     setSteps]   = useState({
+  const [busy,           setBusy]           = useState(false);
+  const [error,          setError]          = useState(null);
+  const [statusMsg,      setStatus]         = useState(null);
+  const [agentId,        setAgentId]        = useState(null);
+  const [pendingChainId, setPendingChainId] = useState(null);
+  const [steps,          setSteps]          = useState({
     contract: null, event: null, backend: null, done: null,
   });
-
-  // Track a split-state scenario: chain succeeded but backend failed.
-  // Lets the user retry the backend-link without re-triggering MetaMask.
-  const [pendingChainId, setPendingChainId] = useState(null);
 
   const setStep = useCallback(
     (id, status) => setSteps((prev) => ({ ...prev, [id]: status })),
@@ -93,14 +464,7 @@ export default function RegisterAgent() {
     setSteps({ contract: null, event: null, backend: null, done: null });
   };
 
-  // ── Registration flow ────────────────────────────────────────────────────
-  //
-  //  1. registerAgentOnChain()  — MetaMask gas TX
-  //     → AgentRegistry.sol emits AgentRegistered(agentId, owner, name)
-  //  2. Parse agentId from receipt event
-  //  3. POST to backend with on_chain_id — links DB record to chain
-  //  4. AgentContext.setAgent() updates — rest of app knows agent exists
-  //
+  // ── Registration flow ──────────────────────────────────────────────────────
   const handleSubmit = async () => {
     if (!name.trim()) { setError("Agent name is required."); return; }
     if (!account)     { setError("Wallet not connected."); return; }
@@ -108,22 +472,19 @@ export default function RegisterAgent() {
     setBusy(true);
     resetFlow();
 
-    let resolvedChainId = null; // set once the chain step succeeds
+    let resolvedChainId = null;
 
     try {
-      // ── Step 1 & 2: On-chain registration ────────────────────────────────
+      // Step 1 & 2 — On-chain
       setStep("contract", "pending");
       setStatus("MetaMask opening — approve the transaction to register your agent on-chain…");
 
       try {
-        // FIX: registerAgentOnChain is now called here and awaited before
-        // the backend call. Previously this function was never invoked from
-        // RegisterAgent.jsx, which is why on_chain_id was always null.
         const { agentId: id } = await registerAgentOnChain(
           name.trim(),
           strategy,
-          account,  // endpoint: wallet address as unique identifier
-          "",       // tokenURI: empty — can be set to IPFS metadata URI later
+          account,
+          "",
         );
 
         setStep("contract", "done");
@@ -135,23 +496,18 @@ export default function RegisterAgent() {
           setStep("event", "done");
           setStatus(`On-chain registered! Agent ID: #${id}. Saving to backend…`);
         } else {
-          // Contract TX mined but event parsing failed — rare.
-          // We still proceed; the backend record will have on_chain_id=null
-          // and the user can link it later via Dashboard.
           setStep("event", "error");
           setStatus(
             "TX confirmed but could not read Agent ID from event. " +
             "Saving to backend — you can link the chain ID from Dashboard."
           );
         }
-
       } catch (contractErr) {
-        // User rejected MetaMask — abort entirely
         if (
           contractErr.code === 4001 ||
           contractErr.message?.includes("user rejected") ||
           contractErr.message?.includes("User denied") ||
-          contractErr.code === "ACTION_REJECTED" // ethers v6 code
+          contractErr.code === "ACTION_REJECTED"
         ) {
           setStep("contract", "error");
           setError("Registration cancelled — MetaMask transaction rejected.");
@@ -159,7 +515,6 @@ export default function RegisterAgent() {
           return;
         }
 
-        // Contract not deployed / wrong network — warn but don't block backend save
         console.warn("On-chain registration failed:", contractErr.message);
         setStep("contract", "error");
         setStep("event",    "error");
@@ -169,19 +524,12 @@ export default function RegisterAgent() {
         );
       }
 
-      // ── Step 3: Save to backend ───────────────────────────────────────────
+      // Step 3 — Backend
       setStep("backend", "pending");
       setStatus("Saving agent to backend…");
 
       try {
-        await register(
-          name.trim(),
-          strategy,
-          risk,
-          maxTrade,
-          resolvedChainId, // null if contract step failed — backend still creates record
-        );
-
+        await register(name.trim(), strategy, risk, maxTrade, resolvedChainId);
         setStep("backend", "done");
         setStep("done",    "done");
         setStatus(
@@ -189,12 +537,8 @@ export default function RegisterAgent() {
             ? `Agent registered! On-chain ID: #${resolvedChainId}. MetaMask will open on every trade.`
             : "Agent saved to backend. Register on-chain from Dashboard to enable blockchain trading."
         );
-
       } catch (backendErr) {
-        // FIX: Split-state handling — chain TX succeeded but backend save failed.
-        // Store the chain ID so the user can retry linking without re-signing.
         setStep("backend", "error");
-
         if (resolvedChainId != null) {
           setPendingChainId(resolvedChainId);
           setError(
@@ -206,15 +550,12 @@ export default function RegisterAgent() {
           setError(backendErr.response?.data?.detail || backendErr.message);
         }
       }
-
     } finally {
       setBusy(false);
     }
   };
 
-  // ── Retry: link on_chain_id to existing backend record ───────────────────
-  // Used when the chain TX succeeded but the initial backend POST failed.
-  // Calls PATCH /agents/{wallet}/link-chain — no MetaMask needed.
+  // ── Retry backend link ─────────────────────────────────────────────────────
   const handleRetryBackend = async () => {
     if (!pendingChainId) return;
     setBusy(true);
@@ -223,22 +564,12 @@ export default function RegisterAgent() {
     setStep("backend", "pending");
 
     try {
-      // Try re-registering first (idempotent — backend returns existing if present)
-      await register(
-        name.trim(),
-        strategy,
-        risk,
-        maxTrade,
-        pendingChainId,
-      );
-
+      await register(name.trim(), strategy, risk, maxTrade, pendingChainId);
       setStep("backend", "done");
       setStep("done",    "done");
       setPendingChainId(null);
       setStatus(`Agent registered! On-chain ID: #${pendingChainId}.`);
-    } catch (e) {
-      // If re-register fails (e.g. agent already in DB without chain id),
-      // fall back to the PATCH /link-chain endpoint.
+    } catch {
       try {
         await linkChainId(account, pendingChainId);
         setStep("backend", "done");
@@ -258,96 +589,154 @@ export default function RegisterAgent() {
   const isDone      = steps.done === "done";
 
   return (
-    <Card className="max-w-md">
-      <SectionTitle>Register Agent</SectionTitle>
+    <div style={{ maxWidth: 460, width: "100%" }}>
+      <div style={{
+        ...T.card,
+        // Accent top border — matches IdentityHub verified card
+        borderTop: "1px solid rgba(0,255,136,0.25)",
+        boxShadow: "0 0 40px rgba(0,255,136,0.06), 0 0 80px rgba(0,191,255,0.04)",
+      }}>
 
-      <div className="mb-4 px-3 py-2 rounded border border-blue/20 bg-blue/5">
-        <p className="text-xs mono text-blue leading-relaxed">
-          Clicking Register will open MetaMask to approve a gas transaction
-          on Sepolia. This writes your agent to the{" "}
-          <span className="text-text">AgentRegistry</span> contract and gives
-          it an on-chain ID — required for EIP-712 signed trades and
-          ValidationRegistry audit logs.
-        </p>
-      </div>
+        {/* ── Header ─────────────────────────────────────────────────────── */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+          {/* Avatar — identical to IdentityHub's agent icon */}
+          <div style={{
+            width: 44, height: 44,
+            borderRadius: "50%",
+            background: "linear-gradient(135deg, #00FF88, #00BFFF)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 20, flexShrink: 0,
+          }}>
+            🤖
+          </div>
+          <div>
+            <h2 style={{
+              fontFamily: "'Syne', sans-serif",
+              fontWeight: 800,
+              fontSize: 18,
+              color: "var(--text)",
+              margin: 0,
+              lineHeight: 1.2,
+            }}>
+              Register Agent
+            </h2>
+            <p style={{ ...T.mono, fontSize: 9, color: "#6b7280", margin: "3px 0 0" }}>
+              AgentRegistry · Sepolia Testnet
+            </p>
+          </div>
+        </div>
 
-      <div className="flex flex-col gap-3">
-        <Input
-          label="Agent Name"
-          value={name}
-          onChange={setName}
-          placeholder="e.g. AlphaBot"
-          disabled={busy || isDone}
-        />
-        <Input
-          label="Strategy"
-          value={strategy}
-          onChange={setStrategy}
-          options={STRATEGIES}
-          disabled={busy || isDone}
-        />
-        <Input
-          label="Risk Tolerance"
-          value={risk}
-          onChange={setRisk}
-          options={RISK_LEVELS}
-          disabled={busy || isDone}
-        />
-        <Input
-          label="Max Trade (USD)"
-          value={maxTrade}
-          onChange={setMaxTrade}
-          type="number"
-          placeholder="500"
-          disabled={busy || isDone}
-        />
+        {/* ── MetaMask info banner ────────────────────────────────────────── */}
+        <div style={{
+          ...T.mono,
+          fontSize: 11,
+          lineHeight: 1.65,
+          padding: "10px 13px",
+          borderRadius: 10,
+          background: "rgba(0,191,255,0.06)",
+          border: "1px solid rgba(0,191,255,0.15)",
+          color: "#60a5fa",
+          marginBottom: 20,
+        }}>
+          Clicking <strong style={{ color: "var(--text)" }}>Register</strong> will open MetaMask
+          to approve a gas transaction on Sepolia. This writes your agent to the{" "}
+          <span style={{ color: "var(--text)" }}>AgentRegistry</span> contract — required for
+          EIP-712 signed trades and ValidationRegistry audit logs.
+        </div>
 
+        <Divider />
+
+        {/* ── Form fields ────────────────────────────────────────────────── */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 4 }}>
+
+          <Field label="Agent Name">
+            <StyledInput
+              value={name}
+              onChange={setName}
+              placeholder="e.g. AlphaBot"
+              disabled={busy || isDone}
+              autoFocus
+            />
+          </Field>
+
+          <Field label="Strategy">
+            <StyledSelect
+              value={strategy}
+              onChange={setStrategy}
+              options={STRATEGIES}
+              disabled={busy || isDone}
+            />
+          </Field>
+
+          {/* Two-column row */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <Field label="Risk Tolerance">
+              <StyledSelect
+                value={risk}
+                onChange={setRisk}
+                options={RISK_LEVELS}
+                disabled={busy || isDone}
+              />
+            </Field>
+            <Field label="Max Trade (USD)">
+              <StyledInput
+                type="number"
+                value={maxTrade}
+                onChange={setMaxTrade}
+                placeholder="500"
+                disabled={busy || isDone}
+              />
+            </Field>
+          </div>
+        </div>
+
+        {/* ── Step progress bar ───────────────────────────────────────────── */}
         {showStepBar && <StepBar steps={steps} />}
 
+        {/* ── Status message ──────────────────────────────────────────────── */}
         {statusMsg && !error && (
-          <p className={`text-xs mono px-3 py-2 rounded border ${
-            isDone
-              ? "text-green border-green/20 bg-green/5"
-              : "text-yellow border-yellow/20 bg-yellow/5"
-          }`}>
-            {statusMsg}
-          </p>
+          <div style={{ marginTop: 12 }}>
+            <StatusMsg type={isDone ? "success" : "info"}>
+              {statusMsg}
+            </StatusMsg>
+          </div>
         )}
 
+        {/* ── On-chain ID badge ───────────────────────────────────────────── */}
         {agentId != null && (
-          <div className="flex items-center gap-2">
-            <span className="text-xs mono px-2 py-1 rounded bg-blue/10 text-blue border border-blue/20">
-              ⛓ On-chain Agent ID: #{agentId}
-            </span>
+          <div style={{ marginTop: 10 }}>
+            <ChainBadge agentId={agentId} />
           </div>
         )}
 
+        {/* ── Error ──────────────────────────────────────────────────────── */}
         {error && (
-          <p className="text-xs text-red mono px-3 py-2 rounded border border-red/20 bg-red/5">
-            {error}
-          </p>
-        )}
-
-        {!isDone ? (
-          <div className="flex flex-col gap-2">
-            <ActionBtn onClick={handleSubmit} loading={busy} disabled={busy}>
-              {busy ? "Registering…" : "Register Agent"}
-            </ActionBtn>
-
-            {/* Show retry button when chain succeeded but backend failed */}
-            {pendingChainId != null && !busy && (
-              <ActionBtn onClick={handleRetryBackend} variant="secondary">
-                Retry Backend Save (Chain ID: #{pendingChainId})
-              </ActionBtn>
-            )}
-          </div>
-        ) : (
-          <div className="px-3 py-2 rounded border border-green/20 bg-green/5 text-xs mono text-green text-center">
-            ✓ Agent registered successfully
+          <div style={{ marginTop: 12 }}>
+            <StatusMsg type="error">{error}</StatusMsg>
           </div>
         )}
+
+        {/* ── Actions ────────────────────────────────────────────────────── */}
+        <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 8 }}>
+          {!isDone ? (
+            <>
+              <PrimaryBtn onClick={handleSubmit} loading={busy} disabled={busy}>
+                {busy ? "Registering…" : "Register Agent"}
+              </PrimaryBtn>
+
+              {pendingChainId != null && !busy && (
+                <SecondaryBtn onClick={handleRetryBackend}>
+                  Retry Backend Save — Chain ID #{pendingChainId}
+                </SecondaryBtn>
+              )}
+            </>
+          ) : (
+            <SuccessBanner />
+          )}
+        </div>
+
       </div>
-    </Card>
+    </div>
   );
 }
 
