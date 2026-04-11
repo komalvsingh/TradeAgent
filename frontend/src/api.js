@@ -1,4 +1,4 @@
-const API_URL = process.env.REACT_APP_API_URL;
+const API_URL = process.env.VITE_API_URL;
 
 export const getDecision = async () => {
   const res = await fetch(`${API_URL}/decision`);
