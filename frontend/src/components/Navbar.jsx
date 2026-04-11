@@ -12,6 +12,7 @@ const NAV = [
   { path: "/trade",      label: "Trade"      },
   { path: "/market",     label: "Market"     },
   { path: "/history",    label: "History"    },
+  { path: "/voice",    label: "Voice"    },
 ];
 
 export default function Navbar() {
